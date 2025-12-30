@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LGTV Logger Shortener
 // @namespace    http://tampermonkey.net/
-// @version      1
+// @version      1.1
 // @description  Create IP Logger links with custom URL and slugs input
 // @author       kr0m4
 // @match        https://iplogger.org/account/*
@@ -14,12 +14,56 @@
     'use strict';
 
     console.log('═══════════════════════════════════════');
-    console.log('🚀 IP Logger Batch Creator LOADED v1!');
+    console.log('🚀 IP Logger Batch Creator LOADED v1.1!');
     console.log('═══════════════════════════════════════');
 
     const CONFIG = {
         domain: '2no.co',
     };
+
+    // Create background overlay with kr0m4 text
+    function createBackgroundOverlay() {
+        const overlay = document.createElement('div');
+        overlay.id = 'kr0m4-background-overlay';
+        overlay.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%);
+            z-index: 1;
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+        `;
+
+        overlay.innerHTML = `
+            <div style="
+                font-size: 25vw;
+                font-weight: 900;
+                color: rgba(102, 126, 234, 0.08);
+                letter-spacing: -0.05em;
+                user-select: none;
+                transform: rotate(-15deg);
+                font-family: 'Arial Black', Arial, sans-serif;
+            ">kr0m4</div>
+        `;
+
+        document.body.appendChild(overlay);
+        console.log('✅ kr0m4 background overlay created!');
+    }
+
+    // Remove background overlay
+    function removeBackgroundOverlay() {
+        const overlay = document.getElementById('kr0m4-background-overlay');
+        if (overlay) {
+            overlay.remove();
+            console.log('🗑️ kr0m4 background overlay removed!');
+        }
+    }
 
     // Create one link
     async function createLink(url, domain, slug) {
@@ -100,6 +144,9 @@
             console.log(`║  Success: ${state.success}                        ║`);
             console.log(`║  Failed: ${state.fail}                         ║`);
             console.log('╚════════════════════════════════════╝');
+
+            // Remove background overlay when complete
+            removeBackgroundOverlay();
 
             // Generate all links from original slugs
             const allLinks = state.originalSlugs.map(slug => `https://${CONFIG.domain}/${slug}`).join('\n');
@@ -288,7 +335,7 @@
             running: true,
             targetUrl: url,
             remainingSlugs: [...slugs],
-            originalSlugs: [...slugs], // Store original slugs for copying
+            originalSlugs: [...slugs],
             totalSlugs: slugs.length,
             success: 0,
             fail: 0
@@ -297,6 +344,10 @@
         console.log('▶️ Batch STARTED!');
         console.log(`   Target URL: ${url}`);
         console.log(`   Total slugs: ${slugs.length}`);
+        
+        // Create background overlay when batch starts
+        createBackgroundOverlay();
+        
         updateControlPanel();
         setTimeout(() => run(), 50);
     }
@@ -305,7 +356,9 @@
     function stopBatch() {
         const state = JSON.parse(sessionStorage.getItem('batch_state') || 'null');
 
-        // If there are slugs, offer to copy the links before stopping
+        // Remove background overlay when stopping
+        removeBackgroundOverlay();
+
         if (state && state.originalSlugs && state.originalSlugs.length > 0) {
             const copy = confirm(`You have ${state.originalSlugs.length} slugs.\n\nDo you want to copy all the shortened links before stopping?`);
             if (copy) {
@@ -320,6 +373,7 @@
 
     // Reset batch
     function resetBatch() {
+        removeBackgroundOverlay();
         sessionStorage.removeItem('batch_state');
         console.log('🔄 Batch RESET!');
         location.reload();
@@ -340,7 +394,6 @@
             return;
         }
 
-        // Generate all links from the original slugs
         const allLinks = state.originalSlugs.map(slug => `https://${CONFIG.domain}/${slug}`).join('\n');
 
         console.log(`📋 Attempting to copy ${state.originalSlugs.length} links...`);
@@ -364,7 +417,6 @@
 
         const state = JSON.parse(sessionStorage.getItem('batch_state') || '{}');
 
-        // Check if we have original slugs (means batch was started)
         const linksCount = (state.originalSlugs && Array.isArray(state.originalSlugs)) ? state.originalSlugs.length : 0;
         const hasLinks = linksCount > 0;
 
@@ -434,7 +486,6 @@
             document.getElementById('stopBtn').addEventListener('click', stopBatch);
             document.getElementById('resetBtn').addEventListener('click', resetBatch);
         } else if (state.completed) {
-            // Batch is complete - show completion status with copy button
             panel.innerHTML = `
                 <div style="font-size: 18px; font-weight: bold; margin-bottom: 10px;">
                     ✅ Batch Complete!
@@ -560,20 +611,20 @@
         console.log(`   Remaining slugs: ${state.remainingSlugs?.length || 0}`);
         console.log(`   Original slugs: ${state.originalSlugs?.length || 0}`);
 
-        // If batch is completed, just update the panel to show completion state
         if (state.completed) {
             console.log('   ✅ Batch is complete! Showing completion panel.');
             updateControlPanel();
             return;
         }
 
-        // If batch is running and has remaining slugs, continue
         if (state && state.running && state.remainingSlugs && state.remainingSlugs.length > 0) {
             console.log('   ✅ Batch should continue!');
             console.log(`   Next slug: ${state.remainingSlugs[0]}`);
             console.log('   Starting in 1.5 seconds...\n');
 
-            // Update panel to show current progress
+            // Show background overlay if batch is running
+            createBackgroundOverlay();
+
             updateControlPanel();
 
             setTimeout(() => {
