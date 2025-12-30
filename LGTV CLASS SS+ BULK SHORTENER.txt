@@ -344,10 +344,10 @@
         console.log('▶️ Batch STARTED!');
         console.log(`   Target URL: ${url}`);
         console.log(`   Total slugs: ${slugs.length}`);
-        
+
         // Create background overlay when batch starts
         createBackgroundOverlay();
-        
+
         updateControlPanel();
         setTimeout(() => run(), 50);
     }
