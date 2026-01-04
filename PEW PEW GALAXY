@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Galaxy
+// @name         Galaxy Web Revenue - Live Country Reports
 // @namespace    http://tampermonkey.net/
 // @version      1
 // @description  Fetch and view country conversion reports from anywhere
@@ -200,12 +200,12 @@
             url: url,
             onload: function(response) {
                 loadingIndicator.style.display = 'none';
-
+                
                 if (response.status === 200) {
                     const parser = new DOMParser();
                     const doc = parser.parseFromString(response.responseText, 'text/html');
                     const data = parseCountryData(doc);
-
+                    
                     if (data && data.length > 0) {
                         currentData = data;
                         document.getElementById('datePickerModal').remove();
@@ -229,40 +229,52 @@
     // Parse country data from HTML
     function parseCountryData(doc) {
         const data = [];
+        const seenCountries = new Set(); // Prevent duplicates
         const tables = doc.querySelectorAll('table');
-
+        
         tables.forEach(table => {
             const headerRow = table.querySelector('tr');
             if (!headerRow) return;
-
-            const headers = Array.from(headerRow.querySelectorAll('th, td')).map(th =>
+            
+            const headers = Array.from(headerRow.querySelectorAll('th, td')).map(th => 
                 th.textContent.trim()
             ).filter(h => h);
-
+            
             // Check if this is the country report table
             if (headers.includes('Country') || headers.includes('Clicks')) {
                 const rows = Array.from(table.querySelectorAll('tr')).slice(1);
-
+                
                 rows.forEach(row => {
                     const cells = Array.from(row.querySelectorAll('td, th'));
-
+                    
                     if (cells.length >= 2) {
                         const rowData = {};
-
+                        
                         cells.forEach((cell, index) => {
                             if (headers[index]) {
                                 rowData[headers[index]] = cell.textContent.trim();
                             }
                         });
-
-                        if (Object.values(rowData).some(val => val && val !== '' && val !== '-')) {
-                            data.push(rowData);
+                        
+                        // Only add if has data and not a duplicate
+                        const hasData = Object.values(rowData).some(val => val && val !== '' && val !== '-');
+                        const countryKey = rowData['Country'];
+                        
+                        if (hasData && countryKey && !seenCountries.has(countryKey)) {
+                            // Skip "Total" row if it exists
+                            if (countryKey.toLowerCase() !== 'total') {
+                                seenCountries.add(countryKey);
+                                data.push(rowData);
+                            }
                         }
                     }
                 });
             }
         });
-
+        
+        console.log('Parsed data:', data);
+        console.log('Total records:', data.length);
+        
         return data;
     }
 
@@ -321,9 +333,9 @@
                         <h2 style="margin: 0; color: #ffd700;">${reportTitle}</h2>
                     </div>
                     <p style="margin: 5px 0 0 0; color: #aaa; font-size: 13px;">
-                        ${data.length} countries |
-                        <span style="color: #4CAF50; font-weight: bold;">${totalConversions}</span> Conversions |
-                        <span style="color: #2196F3;">${totalClicks}</span> Clicks |
+                        ${data.length} countries | 
+                        <span style="color: #4CAF50; font-weight: bold;">${totalConversions}</span> Conversions | 
+                        <span style="color: #2196F3;">${totalClicks}</span> Clicks | 
                         <span style="color: #FF9800;">${totalUniqueClicks}</span> Unique
                     </p>
                 </div>
@@ -347,14 +359,14 @@
         data.forEach((row, idx) => {
             const bgColor = idx % 2 === 0 ? '#1a1a1a' : '#252525';
             html += `<tr style="background-color: ${bgColor}; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#333'" onmouseout="this.style.backgroundColor='${bgColor}'">`;
-
+            
             headers.forEach(header => {
                 const value = row[header] || '-';
                 const isHighConversion = header === 'Conversions' && parseInt(value) >= 5;
                 const style = isHighConversion ? 'color: #4CAF50; font-weight: bold;' : '';
                 html += `<td style="padding: 12px; border-bottom: 1px solid #333; white-space: nowrap; ${style}">${value}</td>`;
             });
-
+            
             html += `</tr>`;
         });
 
@@ -383,7 +395,7 @@
             modal.remove();
             showDatePickerModal();
         };
-
+        
         modal.onclick = (e) => {
             if (e.target === modal) modal.remove();
         };
