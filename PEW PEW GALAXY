@@ -1,0 +1,481 @@
+// ==UserScript==
+// @name         Galaxy
+// @namespace    http://tampermonkey.net/
+// @version      1
+// @description  Fetch and view country conversion reports from anywhere
+// @author       kr0m4
+// @match        https://galaxywebrevenue2.com/*
+// @grant        GM_xmlhttpRequest
+// @connect      galaxywebrevenue2.com
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // Configuration
+    const CONFIG = {
+        buttonColor: '#4CAF50',
+        buttonText: '🌍 View Country Reports'
+    };
+
+    let currentData = null;
+
+    // Create view button
+    function createViewButton() {
+        const button = document.createElement('button');
+        button.id = 'countryReportsBtn';
+        button.textContent = CONFIG.buttonText;
+        button.style.cssText = `
+            position: fixed;
+            top: 80px;
+            right: -250px;
+            z-index: 9999;
+            padding: 12px 24px;
+            background-color: ${CONFIG.buttonColor};
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        `;
+
+        button.onmouseover = () => {
+            button.style.backgroundColor = '#45a049';
+            button.style.transform = 'scale(1.05)';
+        };
+
+        button.onmouseout = () => {
+            button.style.backgroundColor = CONFIG.buttonColor;
+            button.style.transform = 'scale(1)';
+        };
+
+        button.onclick = showDatePickerModal;
+        document.body.appendChild(button);
+
+        // Create hover trigger area
+        const hoverZone = document.createElement('div');
+        hoverZone.id = 'hoverZone';
+        hoverZone.style.cssText = `
+            position: fixed;
+            top: 60px;
+            right: 0;
+            width: 200px;
+            height: 100px;
+            z-index: 9998;
+            pointer-events: all;
+        `;
+
+        hoverZone.onmouseenter = () => {
+            button.style.right = '20px';
+        };
+
+        hoverZone.onmouseleave = () => {
+            // Check if mouse is not over the button
+            setTimeout(() => {
+                const isOverButton = button.matches(':hover');
+                if (!isOverButton) {
+                    button.style.right = '-250px';
+                }
+            }, 100);
+        };
+
+        button.onmouseleave = () => {
+            setTimeout(() => {
+                const isOverZone = hoverZone.matches(':hover');
+                if (!isOverZone) {
+                    button.style.right = '-250px';
+                }
+            }, 100);
+        };
+
+        document.body.appendChild(hoverZone);
+    }
+
+    // Show date picker modal
+    function showDatePickerModal() {
+        const modal = document.createElement('div');
+        modal.id = 'datePickerModal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.85);
+            z-index: 10000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        `;
+
+        const today = new Date().toISOString().split('T')[0];
+
+        const content = document.createElement('div');
+        content.style.cssText = `
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: #ffffff;
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 10px 50px rgba(0,0,0,0.5);
+            border: 2px solid #ffd700;
+            min-width: 400px;
+        `;
+
+        content.innerHTML = `
+            <h2 style="margin: 0 0 20px 0; color: #ffd700; text-align: center;">🌍 Select Date Range</h2>
+            <div style="margin-bottom: 20px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">From Date:</label>
+                <input type="date" id="dateFrom" value="${today}" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #333; color: white; font-size: 14px;">
+            </div>
+            <div style="margin-bottom: 30px;">
+                <label style="display: block; margin-bottom: 8px; color: #aaa;">To Date:</label>
+                <input type="date" id="dateTo" value="${today}" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #333; color: white; font-size: 14px;">
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 20px;">
+                <button id="todayBtn" style="padding: 10px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Today</button>
+                <button id="yesterdayBtn" style="padding: 10px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Yesterday</button>
+                <button id="last7daysBtn" style="padding: 10px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Last 7 Days</button>
+            </div>
+            <div style="display: flex; gap: 10px;">
+                <button id="fetchBtn" style="flex: 1; padding: 14px; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 16px;">📊 Fetch Reports</button>
+                <button id="cancelBtn" style="padding: 14px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Cancel</button>
+            </div>
+            <div id="loadingIndicator" style="display: none; margin-top: 20px; text-align: center; color: #ffd700;">
+                <div style="display: inline-block; width: 20px; height: 20px; border: 3px solid #ffd700; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
+                <p style="margin-top: 10px;">Fetching data...</p>
+            </div>
+        `;
+
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        // Quick date buttons
+        document.getElementById('todayBtn').onclick = () => {
+            const today = new Date().toISOString().split('T')[0];
+            document.getElementById('dateFrom').value = today;
+            document.getElementById('dateTo').value = today;
+        };
+
+        document.getElementById('yesterdayBtn').onclick = () => {
+            const yesterday = new Date();
+            yesterday.setDate(yesterday.getDate() - 1);
+            const dateStr = yesterday.toISOString().split('T')[0];
+            document.getElementById('dateFrom').value = dateStr;
+            document.getElementById('dateTo').value = dateStr;
+        };
+
+        document.getElementById('last7daysBtn').onclick = () => {
+            const today = new Date();
+            const weekAgo = new Date();
+            weekAgo.setDate(weekAgo.getDate() - 7);
+            document.getElementById('dateFrom').value = weekAgo.toISOString().split('T')[0];
+            document.getElementById('dateTo').value = today.toISOString().split('T')[0];
+        };
+
+        document.getElementById('fetchBtn').onclick = () => {
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+            fetchCountryReports(dateFrom, dateTo);
+        };
+
+        document.getElementById('cancelBtn').onclick = () => modal.remove();
+        modal.onclick = (e) => {
+            if (e.target === modal) modal.remove();
+        };
+    }
+
+    // Fetch country reports data
+    function fetchCountryReports(dateFrom, dateTo) {
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        loadingIndicator.style.display = 'block';
+
+        const url = `https://galaxywebrevenue2.com/report/offer/conversions-by-country?filter=country&d_from=${dateFrom}&d_to=${dateTo}&dateSelect=0`;
+
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: url,
+            onload: function(response) {
+                loadingIndicator.style.display = 'none';
+
+                if (response.status === 200) {
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(response.responseText, 'text/html');
+                    const data = parseCountryData(doc);
+
+                    if (data && data.length > 0) {
+                        currentData = data;
+                        document.getElementById('datePickerModal').remove();
+                        displayResults(data, `Conversions By Country (${dateFrom} to ${dateTo})`);
+                    } else {
+                        alert('No data found for the selected date range.');
+                        loadingIndicator.style.display = 'none';
+                    }
+                } else {
+                    alert('Failed to fetch data. Please make sure you are logged in.');
+                    loadingIndicator.style.display = 'none';
+                }
+            },
+            onerror: function() {
+                alert('Network error. Please try again.');
+                loadingIndicator.style.display = 'none';
+            }
+        });
+    }
+
+    // Parse country data from HTML
+    function parseCountryData(doc) {
+        const data = [];
+        const tables = doc.querySelectorAll('table');
+
+        tables.forEach(table => {
+            const headerRow = table.querySelector('tr');
+            if (!headerRow) return;
+
+            const headers = Array.from(headerRow.querySelectorAll('th, td')).map(th =>
+                th.textContent.trim()
+            ).filter(h => h);
+
+            // Check if this is the country report table
+            if (headers.includes('Country') || headers.includes('Clicks')) {
+                const rows = Array.from(table.querySelectorAll('tr')).slice(1);
+
+                rows.forEach(row => {
+                    const cells = Array.from(row.querySelectorAll('td, th'));
+
+                    if (cells.length >= 2) {
+                        const rowData = {};
+
+                        cells.forEach((cell, index) => {
+                            if (headers[index]) {
+                                rowData[headers[index]] = cell.textContent.trim();
+                            }
+                        });
+
+                        if (Object.values(rowData).some(val => val && val !== '' && val !== '-')) {
+                            data.push(rowData);
+                        }
+                    }
+                });
+            }
+        });
+
+        return data;
+    }
+
+    // Display results in a modal
+    function displayResults(data, reportTitle) {
+        const existingModal = document.getElementById('reportsDataModal');
+        if (existingModal) existingModal.remove();
+
+        const modal = document.createElement('div');
+        modal.id = 'reportsDataModal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.85);
+            z-index: 10000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        `;
+
+        const content = document.createElement('div');
+        content.style.cssText = `
+            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+            color: #ffffff;
+            padding: 30px;
+            border-radius: 12px;
+            max-width: 95%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 50px rgba(0,0,0,0.5);
+            border: 2px solid #ffd700;
+        `;
+
+        const headers = Object.keys(data[0]);
+
+        // Calculate totals
+        let totalConversions = 0;
+        let totalClicks = 0;
+        let totalUniqueClicks = 0;
+
+        data.forEach(row => {
+            totalConversions += parseInt(row['Conversions']) || 0;
+            totalClicks += parseInt(row['Clicks']) || 0;
+            totalUniqueClicks += parseInt(row['Unique Clicks']) || 0;
+        });
+
+        let html = `
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
+                <div>
+                    <div style="display: flex; align-items: center; gap: 10px;">
+                        <span style="font-size: 32px;">🌍</span>
+                        <h2 style="margin: 0; color: #ffd700;">${reportTitle}</h2>
+                    </div>
+                    <p style="margin: 5px 0 0 0; color: #aaa; font-size: 13px;">
+                        ${data.length} countries |
+                        <span style="color: #4CAF50; font-weight: bold;">${totalConversions}</span> Conversions |
+                        <span style="color: #2196F3;">${totalClicks}</span> Clicks |
+                        <span style="color: #FF9800;">${totalUniqueClicks}</span> Unique
+                    </p>
+                </div>
+                <div style="display: flex; gap: 10px;">
+                    <button id="refreshBtn" style="background: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">🔄 New Query</button>
+                    <button id="closeModal" style="background: #f44336; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">✕ Close</button>
+                </div>
+            </div>
+            <div style="overflow-x: auto; background: #0a0a0a; border-radius: 8px; padding: 10px;">
+                <table style="width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px;">
+                    <thead>
+                        <tr style="background-color: #2a2a2a; position: sticky; top: 0;">
+        `;
+
+        headers.forEach(header => {
+            html += `<th style="padding: 14px 12px; text-align: left; border-bottom: 2px solid #ffd700; white-space: nowrap; color: #ffd700; font-weight: bold;">${header}</th>`;
+        });
+
+        html += `</tr></thead><tbody>`;
+
+        data.forEach((row, idx) => {
+            const bgColor = idx % 2 === 0 ? '#1a1a1a' : '#252525';
+            html += `<tr style="background-color: ${bgColor}; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#333'" onmouseout="this.style.backgroundColor='${bgColor}'">`;
+
+            headers.forEach(header => {
+                const value = row[header] || '-';
+                const isHighConversion = header === 'Conversions' && parseInt(value) >= 5;
+                const style = isHighConversion ? 'color: #4CAF50; font-weight: bold;' : '';
+                html += `<td style="padding: 12px; border-bottom: 1px solid #333; white-space: nowrap; ${style}">${value}</td>`;
+            });
+
+            html += `</tr>`;
+        });
+
+        html += `
+                    </tbody>
+                </table>
+            </div>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 20px;">
+                <button id="downloadCSV" style="padding: 14px; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">⬇️ CSV</button>
+                <button id="downloadJSON" style="padding: 14px; background: linear-gradient(135deg, #2196F3, #1976D2); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">⬇️ JSON</button>
+                <button id="downloadExcel" style="padding: 14px; background: linear-gradient(135deg, #10793f, #0d5c2f); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">📊 Excel</button>
+                <button id="copyData" style="padding: 14px; background: linear-gradient(135deg, #FF9800, #F57C00); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">📋 Copy</button>
+            </div>
+        `;
+
+        content.innerHTML = html;
+        modal.appendChild(content);
+        document.body.appendChild(modal);
+
+        document.getElementById('downloadCSV').onclick = () => downloadCSV(data, reportTitle);
+        document.getElementById('downloadJSON').onclick = () => downloadJSON(data, reportTitle);
+        document.getElementById('downloadExcel').onclick = () => downloadExcel(data, reportTitle);
+        document.getElementById('copyData').onclick = () => copyToClipboard(data);
+        document.getElementById('closeModal').onclick = () => modal.remove();
+        document.getElementById('refreshBtn').onclick = () => {
+            modal.remove();
+            showDatePickerModal();
+        };
+
+        modal.onclick = (e) => {
+            if (e.target === modal) modal.remove();
+        };
+
+        document.addEventListener('keydown', function escHandler(e) {
+            if (e.key === 'Escape') {
+                modal.remove();
+                document.removeEventListener('keydown', escHandler);
+            }
+        });
+    }
+
+    // Download functions
+    function downloadCSV(data, reportTitle) {
+        const headers = Object.keys(data[0]);
+        let csv = headers.join(',') + '\n';
+        data.forEach(row => {
+            csv += headers.map(header => {
+                const value = (row[header] || '').toString();
+                return value.includes(',') ? `"${value.replace(/"/g, '""')}"` : value;
+            }).join(',') + '\n';
+        });
+        const timestamp = new Date().toISOString().slice(0,10);
+        downloadFile(csv, `country_conversions_${timestamp}.csv`, 'text/csv');
+        showNotification('✅ CSV downloaded!');
+    }
+
+    function downloadJSON(data, reportTitle) {
+        const json = JSON.stringify(data, null, 2);
+        const timestamp = new Date().toISOString().slice(0,10);
+        downloadFile(json, `country_conversions_${timestamp}.json`, 'application/json');
+        showNotification('✅ JSON downloaded!');
+    }
+
+    function downloadExcel(data, reportTitle) {
+        const headers = Object.keys(data[0]);
+        let excel = `<html><head><meta charset="UTF-8"><style>table{border-collapse:collapse;font-family:Arial;}th{background:#4CAF50;color:white;font-weight:bold;padding:8px;border:1px solid #ddd;}td{padding:8px;border:1px solid #ddd;}tr:nth-child(even){background:#f2f2f2;}</style></head><body><h2>${reportTitle}</h2><table border="1"><thead><tr>`;
+        headers.forEach(h => excel += `<th>${h}</th>`);
+        excel += `</tr></thead><tbody>`;
+        data.forEach(row => {
+            excel += '<tr>';
+            headers.forEach(h => excel += `<td>${row[h] || ''}</td>`);
+            excel += '</tr>';
+        });
+        excel += `</tbody></table></body></html>`;
+        const timestamp = new Date().toISOString().slice(0,10);
+        downloadFile(excel, `country_conversions_${timestamp}.xls`, 'application/vnd.ms-excel');
+        showNotification('✅ Excel downloaded!');
+    }
+
+    function copyToClipboard(data) {
+        const headers = Object.keys(data[0]);
+        let text = headers.join('\t') + '\n';
+        data.forEach(row => {
+            text += headers.map(h => row[h] || '').join('\t') + '\n';
+        });
+        navigator.clipboard.writeText(text).then(() => {
+            showNotification('✅ Copied to clipboard!');
+        });
+    }
+
+    function downloadFile(content, filename, type) {
+        const blob = new Blob([content], { type });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    }
+
+    function showNotification(message) {
+        const notification = document.createElement('div');
+        notification.textContent = message;
+        notification.style.cssText = `position:fixed;top:80px;right:20px;background:linear-gradient(135deg,#4CAF50,#45a049);color:white;padding:16px 28px;border-radius:8px;z-index:10001;box-shadow:0 6px 20px rgba(76,175,80,0.4);animation:slideIn 0.3s ease;font-weight:bold;border:2px solid rgba(255,255,255,0.3);`;
+        document.body.appendChild(notification);
+        setTimeout(() => {
+            notification.style.animation = 'slideOut 0.3s ease';
+            setTimeout(() => notification.remove(), 300);
+        }, 3000);
+    }
+
+    const style = document.createElement('style');
+    style.textContent = `@keyframes slideIn{from{transform:translateX(400px);opacity:0;}to{transform:translateX(0);opacity:1;}}@keyframes slideOut{from{transform:translateX(0);opacity:1;}to{transform:translateX(400px);opacity:0;}}@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}@keyframes spin{to{transform:rotate(360deg);}}`;
+    document.head.appendChild(style);
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', createViewButton);
+    } else {
+        createViewButton();
+    }
+
+})();
