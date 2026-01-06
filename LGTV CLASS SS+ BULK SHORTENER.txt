@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LGTV Logger Shortener
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.2
 // @description  Create IP Logger links with custom URL and slugs input
 // @author       kr0m4
 // @match        https://iplogger.org/account/*
@@ -14,12 +14,28 @@
     'use strict';
 
     console.log('═══════════════════════════════════════');
-    console.log('🚀 IP Logger Batch Creator LOADED v1.1!');
+    console.log('🚀 IP Logger Batch Creator LOADED v1.2!');
     console.log('═══════════════════════════════════════');
 
     const CONFIG = {
         domain: '2no.co',
     };
+
+    // Validate slug function
+    function validateSlug(slug) {
+        // Check if slug ends with underscore
+        if (slug.endsWith('_')) {
+            return { valid: false, reason: 'Cannot end with underscore (_)' };
+        }
+        
+        // Check for special characters (allow only alphanumeric and underscore)
+        const invalidChars = slug.match(/[^a-zA-Z0-9_]/g);
+        if (invalidChars) {
+            return { valid: false, reason: `Contains invalid character(s): ${[...new Set(invalidChars)].join(', ')}` };
+        }
+        
+        return { valid: true };
+    }
 
     // Create background overlay with kr0m4 text
     function createBackgroundOverlay() {
@@ -194,6 +210,92 @@
         }, 500);
     }
 
+    // Validate slugs in real-time
+    function validateSlugsInput() {
+        const textarea = document.getElementById('slugs-input');
+        const errorContainer = document.getElementById('validation-errors');
+        const startBtn = document.getElementById('modal-start-btn');
+        
+        if (!textarea || !errorContainer || !startBtn) return;
+
+        const slugsText = textarea.value.trim();
+        
+        if (!slugsText) {
+            errorContainer.innerHTML = '';
+            startBtn.disabled = false;
+            startBtn.style.opacity = '1';
+            startBtn.style.cursor = 'pointer';
+            return;
+        }
+
+        const slugs = slugsText.split('\n')
+            .map((s, idx) => ({ slug: s.trim(), line: idx + 1 }))
+            .filter(item => item.slug.length > 0);
+
+        const invalidSlugs = [];
+        
+        slugs.forEach(item => {
+            const validation = validateSlug(item.slug);
+            if (!validation.valid) {
+                invalidSlugs.push({
+                    line: item.line,
+                    slug: item.slug,
+                    reason: validation.reason
+                });
+            }
+        });
+
+        if (invalidSlugs.length > 0) {
+            errorContainer.innerHTML = `
+                <div style="
+                    background: #fee2e2;
+                    border: 2px solid #ef4444;
+                    border-radius: 6px;
+                    padding: 12px;
+                    margin-top: 10px;
+                ">
+                    <div style="font-weight: bold; color: #dc2626; margin-bottom: 8px;">
+                        ❌ Invalid Slugs Found (${invalidSlugs.length}):
+                    </div>
+                    <div style="font-size: 12px; color: #991b1b; max-height: 150px; overflow-y: auto;">
+                        ${invalidSlugs.map(item => `
+                            <div style="margin-bottom: 6px; padding: 6px; background: white; border-radius: 4px;">
+                                <strong>Line ${item.line}:</strong> <code style="background: #fecaca; padding: 2px 4px; border-radius: 3px;">${item.slug}</code><br>
+                                <span style="color: #dc2626;">→ ${item.reason}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                    <div style="font-size: 11px; color: #991b1b; margin-top: 8px; font-style: italic;">
+                        ℹ️ Only letters, numbers, and underscores (_) are allowed. Underscores cannot be at the end.
+                    </div>
+                </div>
+            `;
+            
+            startBtn.disabled = true;
+            startBtn.style.opacity = '0.5';
+            startBtn.style.cursor = 'not-allowed';
+        } else {
+            errorContainer.innerHTML = `
+                <div style="
+                    background: #d1fae5;
+                    border: 2px solid #10b981;
+                    border-radius: 6px;
+                    padding: 8px 12px;
+                    margin-top: 10px;
+                    color: #065f46;
+                    font-size: 13px;
+                    font-weight: bold;
+                ">
+                    ✅ All ${slugs.length} slug${slugs.length !== 1 ? 's' : ''} valid!
+                </div>
+            `;
+            
+            startBtn.disabled = false;
+            startBtn.style.opacity = '1';
+            startBtn.style.cursor = 'pointer';
+        }
+    }
+
     // Show input modal
     function showInputModal() {
         const modal = document.createElement('div');
@@ -220,6 +322,8 @@
                 max-width: 500px;
                 width: 90%;
                 box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+                max-height: 90vh;
+                overflow-y: auto;
             ">
                 <h2 style="margin: 0 0 20px 0; color: #667eea; font-size: 24px;">
                     🔗 LGTV PENETRATOR 👌👈
@@ -250,7 +354,7 @@
                     </label>
                     <textarea
                         id="slugs-input"
-                        placeholder="slug1&#10;slug2&#10;slug3"
+                        placeholder="slug1&#10;slug2&#10;slug_test&#10;my_link"
                         style="
                             width: 100%;
                             height: 200px;
@@ -264,8 +368,10 @@
                         "
                     ></textarea>
                     <div style="font-size: 12px; color: #6b7280; margin-top: 5px;">
-                        Enter each slug on a new line
+                        Enter each slug on a new line. Only letters, numbers, and underscores (_) allowed.
+                        <br>⚠️ Underscores cannot be at the end of a slug.
                     </div>
+                    <div id="validation-errors"></div>
                 </div>
 
                 <div style="display: flex; gap: 10px;">
@@ -297,6 +403,10 @@
 
         document.body.appendChild(modal);
 
+        // Add real-time validation
+        const textarea = document.getElementById('slugs-input');
+        textarea.addEventListener('input', validateSlugsInput);
+
         document.getElementById('modal-cancel-btn').addEventListener('click', () => {
             modal.remove();
         });
@@ -321,6 +431,20 @@
 
             if (slugs.length === 0) {
                 alert('Please enter at least one valid slug');
+                return;
+            }
+
+            // Final validation before starting
+            const invalidSlugs = [];
+            slugs.forEach((slug, idx) => {
+                const validation = validateSlug(slug);
+                if (!validation.valid) {
+                    invalidSlugs.push({ line: idx + 1, slug, reason: validation.reason });
+                }
+            });
+
+            if (invalidSlugs.length > 0) {
+                alert(`❌ Cannot start batch!\n\n${invalidSlugs.length} invalid slug(s) found. Please fix them first.`);
                 return;
             }
 
