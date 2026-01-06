@@ -65,7 +65,7 @@
                 user-select: none;
                 transform: rotate(-15deg);
                 font-family: 'Arial Black', Arial, sans-serif;
-            ">kr0m4</div>
+            ">T1T4N-G3L</div>
         `;
 
         document.body.appendChild(overlay);
@@ -783,3 +783,4 @@
     }, 50);
 
 })();
+
