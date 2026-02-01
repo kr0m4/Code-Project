@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         Galaxy Web Revenue - Enhanced Reports + Live Country Reports
+// @name         GWR + PEW PEW
 // @namespace    http://tampermonkey.net/
 // @version      1.4
 // @description  Merged: Conversion rate column, snake animation, country reports, and toggle functionality with persistent state
