@@ -1,29 +1,504 @@
 // ==UserScript==
-// @name         Galaxy Web Revenue - Live Country Reports Enhanced
+// @name         Galaxy Web Revenue - Enhanced Reports + Live Country Reports
 // @namespace    http://tampermonkey.net/
-// @version      1.3
-// @description  Fetch and view country conversion reports with campaign details and watermark
-// @author       kr0m4
+// @version      1.4
+// @description  Merged: Conversion rate column, snake animation, country reports, and toggle functionality with persistent state
+// @author       kr0m4 + You
+// @match        https://galaxywebrevenue2.com/report/offer*
 // @match        https://galaxywebrevenue2.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      galaxywebrevenue2.com
+// @run-at       document-end
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // Configuration
-    const CONFIG = {
-        buttonColor: '#4CAF50',
-        buttonText: 'ADS - BY TITAN GEL',
-        watermarkText: 'TITAN GEL' // Customize your watermark text here
-    };
-
+    // ===== STATE MANAGEMENT =====
+    let currentConversions = 0;
+    // Load saved state from localStorage, default to false (original conversions)
+    let showConversionRate = localStorage.getItem('showConversionRate') === 'true';
+    let originalConversionsData = {}; // Store original conversion values
     let currentData = null;
     let currentDateRange = { from: '', to: '' };
     let cachedCampaignResults = null;
 
-    // Create watermark element
+    // ===== CONFIGURATION =====
+    const CONFIG = {
+        buttonColor: '#4CAF50',
+        buttonText: '🍆 TITAN GEL',
+        watermarkText: '🍆 TITAN GEL'
+    };
+
+    // Auto-refresh every 10 seconds (disabled when modal is open)
+    let autoRefreshTimer = setTimeout(function() {
+        location.reload();
+    }, 10000);
+
+    // Function to cancel auto-refresh
+    window.cancelAutoRefresh = function() {
+        if (autoRefreshTimer) {
+            clearTimeout(autoRefreshTimer);
+            autoRefreshTimer = null;
+        }
+    };
+
+    // Function to restart auto-refresh
+    window.restartAutoRefresh = function() {
+        // Clear any existing timer first
+        if (autoRefreshTimer) {
+            clearTimeout(autoRefreshTimer);
+        }
+        // Start new 10 second timer
+        autoRefreshTimer = setTimeout(function() {
+            location.reload();
+        }, 10000);
+    };
+
+    // ===== MAIN INITIALIZATION =====
+    window.addEventListener('load', function() {
+        enhanceReportTable();
+        createViewButton();
+        createToggleButton();
+    });
+
+    // ===== TOGGLE BUTTON CREATION =====
+    function createToggleButton() {
+        const toggleBtn = document.createElement('button');
+        toggleBtn.id = 'conversionToggleBtn';
+        // Set initial text based on current state
+        toggleBtn.textContent = showConversionRate ? '💊 ROBUST' : '💊 ROBUST';
+        toggleBtn.style.cssText = `
+            position: fixed;
+            top: 140px;
+            right: -300px;
+            z-index: 9999;
+            padding: 12px 24px;
+            background-color: #9C27B0;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: bold;
+            cursor: pointer;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            transition: all 0.3s ease;
+        `;
+
+        toggleBtn.onmouseover = () => {
+            toggleBtn.style.backgroundColor = '#7B1FA2';
+            toggleBtn.style.transform = 'scale(1.05)';
+        };
+
+        toggleBtn.onmouseout = () => {
+            toggleBtn.style.backgroundColor = '#9C27B0';
+            toggleBtn.style.transform = 'scale(1)';
+        };
+
+        toggleBtn.onclick = toggleConversionDisplay;
+        document.body.appendChild(toggleBtn);
+
+        // Extend hover zone to include toggle button
+        const hoverZone = document.getElementById('hoverZone');
+        if (hoverZone) {
+            hoverZone.style.height = '180px';
+        }
+
+        // Add hover functionality
+        const toggleHoverZone = document.createElement('div');
+        toggleHoverZone.id = 'toggleHoverZone';
+        toggleHoverZone.style.cssText = `
+            position: fixed;
+            top: 120px;
+            right: 0;
+            width: 200px;
+            height: 100px;
+            z-index: 9998;
+            pointer-events: all;
+        `;
+
+        toggleHoverZone.onmouseenter = () => {
+            toggleBtn.style.right = '20px';
+        };
+
+        toggleHoverZone.onmouseleave = () => {
+            setTimeout(() => {
+                const isOverButton = toggleBtn.matches(':hover');
+                if (!isOverButton) {
+                    toggleBtn.style.right = '-300px';
+                }
+            }, 100);
+        };
+
+        toggleBtn.onmouseleave = () => {
+            setTimeout(() => {
+                const isOverZone = toggleHoverZone.matches(':hover');
+                if (!isOverZone) {
+                    toggleBtn.style.right = '-300px';
+                }
+            }, 100);
+        };
+
+        document.body.appendChild(toggleHoverZone);
+    }
+
+    // ===== TOGGLE FUNCTIONALITY =====
+    function toggleConversionDisplay() {
+        showConversionRate = !showConversionRate;
+        // Save state to localStorage
+        localStorage.setItem('showConversionRate', showConversionRate.toString());
+
+        const toggleBtn = document.getElementById('conversionToggleBtn');
+
+        if (showConversionRate) {
+            toggleBtn.textContent = 'Show Original Conversions';
+        } else {
+            toggleBtn.textContent = 'Show Conversion Rate';
+        }
+
+        enhanceReportTable();
+    }
+
+    // ===== ENHANCED REPORT TABLE =====
+    function enhanceReportTable() {
+        const table = document.querySelector('table');
+        if (!table) {
+            console.log('Table not found, retrying...');
+            setTimeout(enhanceReportTable, 500);
+            return;
+        }
+
+        const headerRow = table.querySelector('thead tr') || table.rows[0];
+        if (!headerRow) return;
+
+        const headers = Array.from(headerRow.cells);
+        const conversionsIndex = headers.findIndex(cell =>
+            cell.textContent.trim() === 'Conversions' || cell.textContent.trim() === 'Conversion Rate'
+        );
+
+        if (conversionsIndex === -1) {
+            console.log('Conversions column not found');
+            return;
+        }
+
+        const conversionsHeader = headers[conversionsIndex];
+
+        if (showConversionRate) {
+            conversionsHeader.textContent = 'Conversion Rate';
+            conversionsHeader.style.cssText = `
+                text-align: center !important;
+            `;
+        } else {
+            conversionsHeader.textContent = 'Conversions';
+            // Reset to default header styling (no special background)
+            conversionsHeader.style.cssText = `
+                text-align: center !important;
+            `;
+        }
+
+        const tbody = table.querySelector('tbody') || table;
+        const rows = Array.from(tbody.rows).slice(headerRow.parentElement.tagName === 'THEAD' ? 0 : 1);
+
+        let totalRow = null;
+        let totalUnique = 0;
+        let totalConversions = 0;
+
+        rows.forEach((row, rowIndex) => {
+            if (row.cells[0]?.textContent.trim() === 'Offer ID') return;
+
+            const isTotalRow = row.cells[0]?.textContent.trim() === 'TOTAL';
+
+            if (isTotalRow) {
+                totalRow = row;
+                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
+                const conversionsCell = row.cells[conversionsIndex];
+
+                if (uniqueCell && conversionsCell) {
+                    totalUnique = parseInt(uniqueCell.textContent.trim()) || 0;
+
+                    // Store original conversion value if not already stored
+                    if (!originalConversionsData[`total`]) {
+                        const originalText = conversionsCell.textContent.trim();
+                        if (!originalText.includes('%')) {
+                            originalConversionsData[`total`] = originalText;
+                        }
+                    }
+
+                    if (showConversionRate) {
+                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
+                        currentConversions = totalConversions;
+
+                        let conversionRate = 0;
+                        let displayText = '0.00%';
+
+                        if (totalUnique > 0) {
+                            conversionRate = (totalConversions / totalUnique) * 100;
+                            displayText = conversionRate.toFixed(2) + '%';
+                        }
+
+                        conversionsCell.textContent = displayText;
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
+                    } else {
+                        // Show original conversions with default styling
+                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
+                        currentConversions = totalConversions;
+                        conversionsCell.textContent = originalConversionsData[`total`] || totalConversions;
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
+                    }
+                }
+            } else {
+                // For non-TOTAL rows
+                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
+                const conversionsCell = row.cells[conversionsIndex];
+
+                if (uniqueCell && conversionsCell) {
+                    const unique = parseInt(uniqueCell.textContent.trim()) || 0;
+
+                    // Store original conversion value
+                    if (!originalConversionsData[`row_${rowIndex}`]) {
+                        const originalText = conversionsCell.textContent.trim();
+                        if (!originalText.includes('%')) {
+                            originalConversionsData[`row_${rowIndex}`] = originalText;
+                        }
+                    }
+
+                    if (showConversionRate) {
+                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || conversionsCell.textContent.trim()) || 0;
+
+                        if (unique > 0) {
+                            const rate = (conversions / unique) * 100;
+                            conversionsCell.textContent = rate.toFixed(2) + '%';
+                            conversionsCell.style.backgroundColor = '';
+                        } else {
+                            conversionsCell.textContent = '0.00%';
+                        }
+                    } else {
+                        // Show original conversions with default styling
+                        conversionsCell.textContent = originalConversionsData[`row_${rowIndex}`] || '0';
+                        conversionsCell.style.backgroundColor = '';
+                    }
+                    conversionsCell.style.textAlign = 'center';
+                }
+            }
+        });
+
+        // Handle snake animation based on toggle state
+        const existingSnake = document.getElementById('snakeAnimationRow');
+        if (existingSnake) {
+            existingSnake.remove();
+        }
+
+        if (totalRow && showConversionRate) {
+            createRealisticSnake(totalRow.parentNode, totalRow, totalConversions);
+        }
+
+        addGlobalStyles();
+        console.log('✅ Galaxy Web Revenue Enhanced - Toggle enabled!');
+    }
+
+    // ===== SNAKE ANIMATION =====
+    function createRealisticSnake(parentNode, totalRow, conversions) {
+        const snakeRow = document.createElement('tr');
+        snakeRow.id = 'snakeAnimationRow';
+
+        const snakeCell = document.createElement('td');
+        const headerRow = parentNode.closest('table').querySelector('thead tr') || parentNode.closest('table').rows[0];
+        const colCount = headerRow.cells.length;
+        snakeCell.colSpan = colCount;
+
+        snakeCell.style.cssText = `
+            background: linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%) !important;
+            padding: 20px 0 !important;
+            border-top: 2px solid #667eea !important;
+            overflow: hidden !important;
+            position: relative !important;
+        `;
+
+        let savedPosition = parseFloat(localStorage.getItem('snakePosition') || '0');
+
+        snakeCell.innerHTML = `
+            <div id="snakeContainer" style="position: relative; height: 80px; width: 100%; overflow: hidden;">
+                <div id="snakeWrapper" style="position: absolute; left: ${savedPosition}%; top: 50%; transform: translateY(-50%); display: flex; align-items: center; white-space: nowrap;">
+                    <svg width="120" height="60" viewBox="0 0 120 60" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));">
+                        <defs>
+                            <linearGradient id="snakeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" style="stop-color:#2d5016;stop-opacity:1" />
+                                <stop offset="50%" style="stop-color:#4a7c23;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#2d5016;stop-opacity:1" />
+                            </linearGradient>
+                            <radialGradient id="eyeGradient">
+                                <stop offset="0%" style="stop-color:#ffff00;stop-opacity:1" />
+                                <stop offset="100%" style="stop-color:#ff0000;stop-opacity:1" />
+                            </radialGradient>
+                        </defs>
+                        <ellipse cx="10" cy="30" rx="6" ry="8" fill="url(#snakeGradient)">
+                            <animate attributeName="ry" values="8;10;8" dur="1s" repeatCount="indefinite"/>
+                        </ellipse>
+                        <ellipse cx="25" cy="30" rx="10" ry="12" fill="url(#snakeGradient)">
+                            <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite"/>
+                            <animate attributeName="ry" values="12;14;12" dur="1s" repeatCount="indefinite"/>
+                        </ellipse>
+                        <ellipse cx="42" cy="30" rx="11" ry="13" fill="url(#snakeGradient)">
+                            <animate attributeName="cy" values="30;32;30" dur="1s" repeatCount="indefinite" begin="0.2s"/>
+                            <animate attributeName="ry" values="13;15;13" dur="1s" repeatCount="indefinite" begin="0.2s"/>
+                        </ellipse>
+                        <ellipse cx="60" cy="30" rx="12" ry="14" fill="url(#snakeGradient)">
+                            <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite" begin="0.4s"/>
+                            <animate attributeName="ry" values="14;16;14" dur="1s" repeatCount="indefinite" begin="0.4s"/>
+                        </ellipse>
+                        <ellipse cx="78" cy="30" rx="11" ry="13" fill="url(#snakeGradient)">
+                            <animate attributeName="cy" values="30;32;30" dur="1s" repeatCount="indefinite" begin="0.6s"/>
+                            <animate attributeName="ry" values="13;15;13" dur="1s" repeatCount="indefinite" begin="0.6s"/>
+                        </ellipse>
+                        <ellipse cx="95" cy="30" rx="13" ry="15" fill="url(#snakeGradient)">
+                            <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                        </ellipse>
+                        <path d="M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45"
+                              fill="#3d6b1f" stroke="#2d5016" stroke-width="1">
+                            <animate attributeName="d"
+                                     values="M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45;
+                                             M 95 15 Q 106 20 111 25 Q 106 28 95 30 Q 106 32 111 35 Q 106 40 95 45;
+                                             M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45"
+                                     dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                        </path>
+                        <circle cx="98" cy="25" r="3" fill="url(#eyeGradient)">
+                            <animate attributeName="cy" values="25;23;25" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                        </circle>
+                        <circle cx="98" cy="35" r="3" fill="url(#eyeGradient)">
+                            <animate attributeName="cy" values="35;33;35" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                        </circle>
+                        <circle cx="99" cy="25" r="1.5" fill="#000">
+                            <animate attributeName="cy" values="25;23;25" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                        </circle>
+                        <circle cx="99" cy="35" r="1.5" fill="#000">
+                            <animate attributeName="cy" values="35;33;35" dur="1s" repeatCount="indefinite" begin="0.8s"/>
+                        </circle>
+                        <path d="M 110 30 L 118 28 M 110 30 L 118 32" stroke="#ff0000" stroke-width="1.5" fill="none">
+                            <animate attributeName="d"
+                                     values="M 110 30 L 118 28 M 110 30 L 118 32;
+                                             M 110 30 L 116 28 M 110 30 L 116 32;
+                                             M 110 30 L 118 28 M 110 30 L 118 32"
+                                     dur="0.5s" repeatCount="indefinite"/>
+                        </path>
+                        <circle cx="30" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="35" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="48" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="53" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="66" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="71" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="84" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
+                        <circle cx="89" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
+                    </svg>
+                    <div style="
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white;
+                        font-size: 28px;
+                        font-weight: bold;
+                        padding: 8px 20px;
+                        border-radius: 50px;
+                        margin: 0 20px;
+                        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.5);
+                        font-family: 'Arial Black', sans-serif;
+                        min-width: 60px;
+                        text-align: center;
+                    ">${conversions}</div>
+                </div>
+            </div>
+        `;
+
+        snakeRow.appendChild(snakeCell);
+
+        if (totalRow.nextSibling) {
+            parentNode.insertBefore(snakeRow, totalRow.nextSibling);
+        } else {
+            parentNode.appendChild(snakeRow);
+        }
+
+        animateSnake(savedPosition);
+    }
+
+    function animateSnake(startPosition) {
+        const wrapper = document.getElementById('snakeWrapper');
+        const container = document.getElementById('snakeContainer');
+
+        if (!wrapper || !container) return;
+
+        let position = startPosition;
+        const speed = 0.15;
+
+        function animate() {
+            position += speed;
+
+            if (position > 110) {
+                position = -30;
+            }
+
+            wrapper.style.left = position + '%';
+            localStorage.setItem('snakePosition', position.toString());
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    }
+
+    // ===== GLOBAL STYLES =====
+    function addGlobalStyles() {
+        if (document.getElementById('galaxyEnhancedStyles')) return;
+
+        const style = document.createElement('style');
+        style.id = 'galaxyEnhancedStyles';
+        style.textContent = `
+            body {
+                overflow-x: hidden !important;
+            }
+            table {
+                border-collapse: separate !important;
+                border-spacing: 0 !important;
+                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+                border-radius: 8px !important;
+                overflow: hidden !important;
+                background: rgba(255, 255, 255, 0.95) !important;
+            }
+            table th {
+                position: sticky !important;
+                top: 0 !important;
+                z-index: 10 !important;
+            }
+            table tbody tr:hover {
+                background-color: rgba(102, 126, 234, 0.05) !important;
+                transition: background-color 0.2s ease !important;
+            }
+            table td {
+                padding: 12px 10px !important;
+            }
+            table tbody tr:has(td:first-child:contains("TOTAL")) {
+                background: linear-gradient(90deg, #f9fafb 0%, #f3f4f6 100%) !important;
+                font-weight: 700 !important;
+                border-top: 3px solid #667eea !important;
+            }
+            table td:nth-child(3),
+            table td:nth-child(4),
+            table td:nth-child(5),
+            table td:nth-child(6),
+            table td:nth-child(7),
+            table td:nth-child(8) {
+                text-align: center !important;
+            }
+            @keyframes slideIn{from{transform:translateX(400px);opacity:0;}to{transform:translateX(0);opacity:1;}}
+            @keyframes slideOut{from{transform:translateX(0);opacity:1;}to{transform:translateX(400px);opacity:0;}}
+            @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+            @keyframes spin{to{transform:rotate(360deg);}}
+        `;
+        document.head.appendChild(style);
+    }
+
+    // ===== COUNTRY REPORTS FUNCTIONALITY (from second script) =====
+
     function createWatermark() {
         const watermark = document.createElement('div');
         watermark.className = 'modal-watermark';
@@ -46,7 +521,6 @@
         return watermark;
     }
 
-    // Create animated eggplant and cat with SVG
     function createChaseAnimation() {
         const container = document.createElement('div');
         container.className = 'chase-animation';
@@ -61,7 +535,6 @@
             overflow: hidden;
         `;
 
-        // Create eggplant SVG
         const eggplant = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         eggplant.setAttribute('width', '50');
         eggplant.setAttribute('height', '50');
@@ -73,7 +546,6 @@
             <rect x="23" y="8" width="4" height="8" fill="#2e7d32" rx="2"/>
         `;
 
-        // Create cat SVG
         const cat = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
         cat.setAttribute('width', '60');
         cat.setAttribute('height', '60');
@@ -92,7 +564,6 @@
             <ellipse cx="45" cy="40" rx="3" ry="2" fill="#ff6f00"/>
         `;
 
-        // Animation logic
         let eggplantX = Math.random() * (window.innerWidth - 50);
         let eggplantY = Math.random() * (window.innerHeight - 50);
         let catX = eggplantX - 80;
@@ -100,15 +571,11 @@
 
         let eggplantSpeedX = (Math.random() - 0.5) * 4 + 3;
         let eggplantSpeedY = (Math.random() - 0.5) * 4;
-        let catSpeedX = eggplantSpeedX;
-        let catSpeedY = eggplantSpeedY;
 
         function animate() {
-            // Update eggplant position
             eggplantX += eggplantSpeedX;
             eggplantY += eggplantSpeedY;
 
-            // Bounce off edges and change direction randomly
             if (eggplantX <= 0 || eggplantX >= window.innerWidth - 50) {
                 eggplantSpeedX = -eggplantSpeedX + (Math.random() - 0.5) * 2;
                 eggplantSpeedY += (Math.random() - 0.5) * 2;
@@ -118,28 +585,20 @@
                 eggplantSpeedX += (Math.random() - 0.5) * 2;
             }
 
-            // Keep speeds reasonable
             eggplantSpeedX = Math.max(-5, Math.min(5, eggplantSpeedX));
             eggplantSpeedY = Math.max(-5, Math.min(5, eggplantSpeedY));
 
-            // Cat follows eggplant with some distance
             const dx = eggplantX - catX;
             const dy = eggplantY - catY;
             const distance = Math.sqrt(dx * dx + dy * dy);
 
-            if (distance > 100) {
-                catSpeedX = (dx / distance) * 4;
-                catSpeedY = (dy / distance) * 4;
-            } else {
-                catSpeedX = (dx / distance) * 2;
-                catSpeedY = (dy / distance) * 2;
-            }
+            const catSpeedX = distance > 100 ? (dx / distance) * 4 : (dx / distance) * 2;
+            const catSpeedY = distance > 100 ? (dy / distance) * 4 : (dy / distance) * 2;
 
             catX += catSpeedX;
             catY += catSpeedY;
 
-            // Random respawn if they get too close
-            if (distance < 30) {
+            if (distance < 30 || Math.random() < 0.002) {
                 eggplantX = Math.random() * (window.innerWidth - 50);
                 eggplantY = Math.random() * (window.innerHeight - 50);
                 catX = eggplantX - 100;
@@ -148,48 +607,24 @@
                 eggplantSpeedY = (Math.random() - 0.5) * 4;
             }
 
-            // Random respawn occasionally
-            if (Math.random() < 0.002) {
-                eggplantX = Math.random() * (window.innerWidth - 50);
-                eggplantY = Math.random() * (window.innerHeight - 50);
-                catX = eggplantX - 100;
-                catY = eggplantY;
-                eggplantSpeedX = (Math.random() - 0.5) * 4 + 3;
-                eggplantSpeedY = (Math.random() - 0.5) * 4;
-            }
-
-            // Apply positions
             eggplant.style.left = eggplantX + 'px';
             eggplant.style.top = eggplantY + 'px';
             cat.style.left = catX + 'px';
             cat.style.top = catY + 'px';
 
-            // Flip direction based on movement
-            if (eggplantSpeedX < 0) {
-                eggplant.style.transform = 'scaleX(-1)';
-            } else {
-                eggplant.style.transform = 'scaleX(1)';
-            }
-
-            if (catSpeedX < 0) {
-                cat.style.transform = 'scaleX(-1)';
-            } else {
-                cat.style.transform = 'scaleX(1)';
-            }
+            eggplant.style.transform = eggplantSpeedX < 0 ? 'scaleX(-1)' : 'scaleX(1)';
+            cat.style.transform = catSpeedX < 0 ? 'scaleX(-1)' : 'scaleX(1)';
 
             requestAnimationFrame(animate);
         }
 
         container.appendChild(eggplant);
         container.appendChild(cat);
-
-        // Start animation
         animate();
 
         return container;
     }
 
-    // Create modal base with watermark
     function createModalBase(zIndex = 10000) {
         const modal = document.createElement('div');
         modal.style.cssText = `
@@ -206,16 +641,12 @@
             animation: fadeIn 0.3s ease;
         `;
 
-        // Add watermark
         modal.appendChild(createWatermark());
-
-        // Add chase animation
         modal.appendChild(createChaseAnimation());
 
         return modal;
     }
 
-    // Create view button
     function createViewButton() {
         const button = document.createElement('button');
         button.id = 'countryReportsBtn';
@@ -257,20 +688,25 @@
             top: 60px;
             right: 0;
             width: 200px;
-            height: 100px;
+            height: 180px;
             z-index: 9998;
             pointer-events: all;
         `;
 
         hoverZone.onmouseenter = () => {
             button.style.right = '20px';
+            const toggleBtn = document.getElementById('conversionToggleBtn');
+            if (toggleBtn) toggleBtn.style.right = '20px';
         };
 
         hoverZone.onmouseleave = () => {
             setTimeout(() => {
                 const isOverButton = button.matches(':hover');
-                if (!isOverButton) {
+                const toggleBtn = document.getElementById('conversionToggleBtn');
+                const isOverToggle = toggleBtn ? toggleBtn.matches(':hover') : false;
+                if (!isOverButton && !isOverToggle) {
                     button.style.right = '-250px';
+                    if (toggleBtn) toggleBtn.style.right = '-300px';
                 }
             }, 100);
         };
@@ -278,7 +714,9 @@
         button.onmouseleave = () => {
             setTimeout(() => {
                 const isOverZone = hoverZone.matches(':hover');
-                if (!isOverZone) {
+                const toggleBtn = document.getElementById('conversionToggleBtn');
+                const isOverToggle = toggleBtn ? toggleBtn.matches(':hover') : false;
+                if (!isOverZone && !isOverToggle) {
                     button.style.right = '-250px';
                 }
             }, 100);
@@ -287,8 +725,10 @@
         document.body.appendChild(hoverZone);
     }
 
-    // Show date picker modal
     function showDatePickerModal() {
+        // Cancel auto-refresh when modal opens
+        window.cancelAutoRefresh();
+
         const modal = createModalBase(10000);
         modal.id = 'datePickerModal';
 
@@ -363,13 +803,18 @@
             fetchCountryReports(dateFrom, dateTo);
         };
 
-        document.getElementById('cancelBtn').onclick = () => modal.remove();
+        document.getElementById('cancelBtn').onclick = () => {
+            modal.remove();
+            window.restartAutoRefresh();
+        };
         modal.onclick = (e) => {
-            if (e.target === modal) modal.remove();
+            if (e.target === modal) {
+                modal.remove();
+                window.restartAutoRefresh();
+            }
         };
     }
 
-    // Fetch country reports data
     function fetchCountryReports(dateFrom, dateTo) {
         const loadingIndicator = document.getElementById('loadingIndicator');
         loadingIndicator.style.display = 'block';
@@ -396,11 +841,9 @@
                         displayResults(data, `Conversions By Country (${dateFrom} to ${dateTo})`);
                     } else {
                         alert('No data found for the selected date range.');
-                        loadingIndicator.style.display = 'none';
                     }
                 } else {
                     alert('Failed to fetch data. Please make sure you are logged in.');
-                    loadingIndicator.style.display = 'none';
                 }
             },
             onerror: function() {
@@ -410,7 +853,6 @@
         });
     }
 
-    // Fetch campaign conversions
     function fetchCampaignConversions(offerId) {
         return new Promise((resolve, reject) => {
             const url = `https://galaxywebrevenue2.com/report/offer/${offerId}/conversions-by-country?filter=country&d_from=${currentDateRange.from}&d_to=${currentDateRange.to}&dateSelect=0`;
@@ -439,8 +881,10 @@
         });
     }
 
-    // Show campaigns modal
     function showCampaignsModal() {
+        // Cancel auto-refresh when modal opens
+        window.cancelAutoRefresh();
+
         const modal = createModalBase(10001);
         modal.id = 'campaignsModal';
 
@@ -604,7 +1048,6 @@
             const loadingIndicator = document.getElementById('campaignLoadingIndicator');
             const progressText = document.getElementById('campaignProgress');
             const selectionArea = document.getElementById('campaignSelectionArea');
-            const resultsDiv = document.getElementById('campaignResults');
 
             loadingIndicator.style.display = 'block';
 
@@ -629,13 +1072,18 @@
             displayCampaignResults(results, modal);
         };
 
-        document.getElementById('closeCampaignsModal').onclick = () => modal.remove();
+        document.getElementById('closeCampaignsModal').onclick = () => {
+            modal.remove();
+            window.restartAutoRefresh();
+        };
         modal.onclick = (e) => {
-            if (e.target === modal) modal.remove();
+            if (e.target === modal) {
+                modal.remove();
+                window.restartAutoRefresh();
+            }
         };
     }
 
-    // Display campaign results
     function displayCampaignResults(results, parentModal) {
         const resultsDiv = document.getElementById('campaignResults');
         resultsDiv.style.cssText = 'display: block; position: relative; z-index: 2;';
@@ -690,10 +1138,12 @@
             };
         });
 
-        document.getElementById('closeCampaignsModalFinal').onclick = () => parentModal.remove();
+        document.getElementById('closeCampaignsModalFinal').onclick = () => {
+            parentModal.remove();
+            window.restartAutoRefresh();
+        };
     }
 
-    // Parse country data from HTML
     function parseCountryData(doc) {
         const data = [];
         const seenCountries = new Set();
@@ -739,8 +1189,10 @@
         return data;
     }
 
-    // Display results in a modal
     function displayResults(data, reportTitle, showBackButton = false) {
+        // Cancel auto-refresh when modal opens
+        window.cancelAutoRefresh();
+
         const existingModal = document.getElementById('reportsDataModal');
         if (existingModal) existingModal.remove();
 
@@ -764,7 +1216,6 @@
 
         const headers = Object.keys(data[0]);
 
-        // Calculate totals
         let totalConversions = 0;
         let totalClicks = 0;
         let totalUniqueClicks = 0;
@@ -775,7 +1226,6 @@
             totalUniqueClicks += parseInt(row['Unique Clicks']) || 0;
         });
 
-        // Add back button if viewing campaign details
         const backButtonHtml = showBackButton && cachedCampaignResults ?
             `<button id="backToCampaignsBtn" style="background: #9C27B0; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">🔙 Back to Campaigns</button>` : '';
 
@@ -846,7 +1296,10 @@
         document.getElementById('downloadJSON').onclick = () => downloadJSON(data, reportTitle);
         document.getElementById('downloadExcel').onclick = () => downloadExcel(data, reportTitle);
         document.getElementById('copyData').onclick = () => copyToClipboard(data);
-        document.getElementById('closeModal').onclick = () => modal.remove();
+        document.getElementById('closeModal').onclick = () => {
+            modal.remove();
+            window.restartAutoRefresh();
+        };
         document.getElementById('refreshBtn').onclick = () => {
             modal.remove();
             showDatePickerModal();
@@ -855,7 +1308,6 @@
             showCampaignsModal();
         };
 
-        // Add back button functionality
         if (showBackButton && cachedCampaignResults) {
             document.getElementById('backToCampaignsBtn').onclick = () => {
                 modal.remove();
@@ -864,19 +1316,25 @@
         }
 
         modal.onclick = (e) => {
-            if (e.target === modal) modal.remove();
+            if (e.target === modal) {
+                modal.remove();
+                window.restartAutoRefresh();
+            }
         };
 
         document.addEventListener('keydown', function escHandler(e) {
             if (e.key === 'Escape') {
                 modal.remove();
+                window.restartAutoRefresh();
                 document.removeEventListener('keydown', escHandler);
             }
         });
     }
 
-    // Show campaigns modal with cached results
     function showCampaignsModalWithResults() {
+        // Cancel auto-refresh when modal opens
+        window.cancelAutoRefresh();
+
         const modal = createModalBase(10001);
         modal.id = 'campaignsModal';
 
@@ -905,15 +1363,16 @@
         modal.appendChild(content);
         document.body.appendChild(modal);
 
-        // Display the cached results
         displayCampaignResults(cachedCampaignResults, modal);
 
         modal.onclick = (e) => {
-            if (e.target === modal) modal.remove();
+            if (e.target === modal) {
+                modal.remove();
+                window.restartAutoRefresh();
+            }
         };
     }
 
-    // Download functions
     function downloadCSV(data, reportTitle) {
         const headers = Object.keys(data[0]);
         let csv = headers.join(',') + '\n';
@@ -983,21 +1442,6 @@
             notification.style.animation = 'slideOut 0.3s ease';
             setTimeout(() => notification.remove(), 300);
         }, 3000);
-    }
-
-    const style = document.createElement('style');
-    style.textContent = `
-        @keyframes slideIn{from{transform:translateX(400px);opacity:0;}to{transform:translateX(0);opacity:1;}}
-        @keyframes slideOut{from{transform:translateX(0);opacity:1;}to{transform:translateX(400px);opacity:0;}}
-        @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
-        @keyframes spin{to{transform:rotate(360deg);}}
-    `;
-    document.head.appendChild(style);
-
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', createViewButton);
-    } else {
-        createViewButton();
     }
 
 })();
