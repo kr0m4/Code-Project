@@ -2,7 +2,7 @@
 // @name         GWR + PEW PEW
 // @namespace    http://tampermonkey.net/
 // @version      1.4
-// @description  Merged: Conversion rate column, snake animation, country reports, and toggle functionality with persistent state
+// @description  Merged: Conversion rate column, snake animation, country reports, and toggle functionality with persistent state, and clickable conversions
 // @author       kr0m4 + You
 // @match        https://galaxywebrevenue2.com/report/offer*
 // @match        https://galaxywebrevenue2.com/*
@@ -55,6 +55,92 @@
         }, 10000);
     };
 
+    // ===== HELPER FUNCTIONS =====
+    
+    // Extract user ID from current page
+    function extractUserId() {
+        // Try to get from URL first
+        const urlMatch = window.location.href.match(/user\/(\d+)/);
+        if (urlMatch) {
+            return urlMatch[1];
+        }
+        
+        // Try to get from any link on the page
+        const links = document.querySelectorAll('a[href*="/user/"]');
+        for (const link of links) {
+            const linkMatch = link.href.match(/user\/(\d+)/);
+            if (linkMatch) {
+                return linkMatch[1];
+            }
+        }
+        
+        return null;
+    }
+
+    // Get date range from URL or form
+    function getDateRangeFromPage() {
+        // Try to get from URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        const dFrom = urlParams.get('d_from');
+        const dTo = urlParams.get('d_to');
+        const dateSelect = urlParams.get('dateSelect');
+        
+        if (dFrom && dTo) {
+            return { from: dFrom, to: dTo, dateSelect: dateSelect || '0' };
+        }
+        
+        // Try to get from date input fields on the page
+        const fromInput = document.querySelector('input[name="d_from"]');
+        const toInput = document.querySelector('input[name="d_to"]');
+        
+        if (fromInput && toInput && fromInput.value && toInput.value) {
+            return { 
+                from: fromInput.value, 
+                to: toInput.value,
+                dateSelect: '0'
+            };
+        }
+        
+        // Default to today
+        const today = new Date().toISOString().split('T')[0];
+        return { from: today, to: today, dateSelect: '0' };
+    }
+
+    // Build conversion details URL
+    function buildConversionUrl(userId, offerId, dateRange) {
+        return `https://galaxywebrevenue2.com/user/${userId}/${offerId}/conversions-by-country?d_from=${dateRange.from}&d_to=${dateRange.to}&dateSelect=${dateRange.dateSelect}`;
+    }
+
+    // Extract offer ID from a table row
+    function extractOfferIdFromRow(row) {
+        // Look for offer ID in the first few cells
+        for (let i = 0; i < Math.min(3, row.cells.length); i++) {
+            const cell = row.cells[i];
+            
+            // Check for a link first
+            const link = cell.querySelector('a');
+            if (link && link.href) {
+                // Try to extract from link like /report/offer/1019/
+                const linkMatch = link.href.match(/\/offer\/(\d+)/);
+                if (linkMatch) {
+                    return linkMatch[1];
+                }
+            }
+            
+            // Try to parse text content as number
+            const text = cell.textContent.trim();
+            if (/^\d+$/.test(text)) {
+                const num = parseInt(text);
+                // Reasonable offer ID range (adjust if needed)
+                if (num > 900 && num < 10000) {
+                    return text;
+                }
+            }
+        }
+        
+        return null;
+    }
+
     // ===== MAIN INITIALIZATION =====
     window.addEventListener('load', function() {
         enhanceReportTable();
@@ -67,7 +153,7 @@
         const toggleBtn = document.createElement('button');
         toggleBtn.id = 'conversionToggleBtn';
         // Set initial text based on current state
-        toggleBtn.textContent = showConversionRate ? '💊 ROBUST' : '💊 ROBUST';
+        toggleBtn.textContent = showConversionRate ? '💊 Show Conversions' : '💊 Show Conv Rate';
         toggleBtn.style.cssText = `
             position: fixed;
             top: 140px;
@@ -151,9 +237,9 @@
         const toggleBtn = document.getElementById('conversionToggleBtn');
 
         if (showConversionRate) {
-            toggleBtn.textContent = 'Show Original Conversions';
+            toggleBtn.textContent = '💊 Show Conversions';
         } else {
-            toggleBtn.textContent = 'Show Conversion Rate';
+            toggleBtn.textContent = '💊 Show Conv Rate';
         }
 
         enhanceReportTable();
@@ -203,6 +289,12 @@
         let totalUnique = 0;
         let totalConversions = 0;
 
+        // Get user ID and date range for conversion links
+        const userId = extractUserId();
+        const dateRange = getDateRangeFromPage();
+
+        console.log('User ID:', userId, 'Date Range:', dateRange);
+
         rows.forEach((row, rowIndex) => {
             if (row.cells[0]?.textContent.trim() === 'Offer ID') return;
 
@@ -219,7 +311,7 @@
                     // Store original conversion value if not already stored
                     if (!originalConversionsData[`total`]) {
                         const originalText = conversionsCell.textContent.trim();
-                        if (!originalText.includes('%')) {
+                        if (!originalText.includes('%') && !originalText.includes('<')) {
                             originalConversionsData[`total`] = originalText;
                         }
                     }
@@ -241,7 +333,7 @@
                             text-align: center !important;
                         `;
                     } else {
-                        // Show original conversions with default styling
+                        // Show original conversions as plain text (TOTAL row not clickable)
                         totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
                         currentConversions = totalConversions;
                         conversionsCell.textContent = originalConversionsData[`total`] || totalConversions;
@@ -261,7 +353,7 @@
                     // Store original conversion value
                     if (!originalConversionsData[`row_${rowIndex}`]) {
                         const originalText = conversionsCell.textContent.trim();
-                        if (!originalText.includes('%')) {
+                        if (!originalText.includes('%') && !originalText.includes('<')) {
                             originalConversionsData[`row_${rowIndex}`] = originalText;
                         }
                     }
@@ -276,12 +368,31 @@
                         } else {
                             conversionsCell.textContent = '0.00%';
                         }
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
                     } else {
-                        // Show original conversions with default styling
-                        conversionsCell.textContent = originalConversionsData[`row_${rowIndex}`] || '0';
-                        conversionsCell.style.backgroundColor = '';
+                        // Show original conversions - make clickable if possible
+                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || '0');
+                        
+                        // Extract offer ID from this row
+                        const offerId = extractOfferIdFromRow(row);
+                        
+                        console.log('Row', rowIndex, 'Offer ID:', offerId, 'Conversions:', conversions, 'User ID:', userId);
+                        
+                        // Make clickable if we have all the necessary info and conversions > 0
+                        if (userId && offerId && conversions > 0) {
+                            const conversionUrl = buildConversionUrl(userId, offerId, dateRange);
+                            conversionsCell.innerHTML = `<a href="${conversionUrl}" style="color: #2196F3; text-decoration: none; cursor: pointer;">${conversions}</a>`;
+                            console.log('Created link:', conversionUrl);
+                        } else {
+                            conversionsCell.textContent = originalConversionsData[`row_${rowIndex}`] || '0';
+                        }
+                        
+                        conversionsCell.style.cssText = `
+                            text-align: center !important;
+                        `;
                     }
-                    conversionsCell.style.textAlign = 'center';
                 }
             }
         });
@@ -297,7 +408,7 @@
         }
 
         addGlobalStyles();
-        console.log('✅ Galaxy Web Revenue Enhanced - Toggle enabled!');
+        console.log('✅ Galaxy Web Revenue Enhanced - Toggle enabled with clickable conversions!');
     }
 
     // ===== SNAKE ANIMATION =====
@@ -488,6 +599,9 @@
             table td:nth-child(7),
             table td:nth-child(8) {
                 text-align: center !important;
+            }
+            table td a:hover {
+                text-decoration: underline !important;
             }
             @keyframes slideIn{from{transform:translateX(400px);opacity:0;}to{transform:translateX(0);opacity:1;}}
             @keyframes slideOut{from{transform:translateX(0);opacity:1;}to{transform:translateX(400px);opacity:0;}}
