@@ -1,1561 +1,600 @@
 // ==UserScript==
-// @name         GWR + PEW PEW
+// @name         Galaxy Web Revenue - Campaign Reports
 // @namespace    http://tampermonkey.net/
-// @version      1.4
-// @description  Merged: Conversion rate column, snake animation, country reports, and toggle functionality with persistent state, and clickable conversions
-// @author       kr0m4 + You
-// @match        https://galaxywebrevenue2.com/report/offer*
+// @version      1.5
+// @description  Fetch and view campaign conversion reports with country details and watermark
+// @author       kr0m4
 // @match        https://galaxywebrevenue2.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      galaxywebrevenue2.com
-// @run-at       document-end
 // ==/UserScript==
 
 (function() {
     'use strict';
 
-    // ===== STATE MANAGEMENT =====
-    let currentConversions = 0;
-    // Load saved state from localStorage, default to false (original conversions)
-    let showConversionRate = localStorage.getItem('showConversionRate') === 'true';
-    let originalConversionsData = {}; // Store original conversion values
-    let currentData = null;
+    const CONFIG = {
+        buttonColor: '#ff9800',
+        buttonText: 'ADS - BY TITAN GEL',
+        watermarkText: 'TITAN GEL',
+        bgGif: 'https://media3.giphy.com/media/v1.Y2lkPTc5MGI3NjExdXBocGVkYjJhdDd5NHoybGN6MzdxenJsZGhqZW9ka2M5YXYzNTJyeiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/pVWuLuV1JESZJdebkI/giphy.gif'
+    };
+
     let currentDateRange = { from: '', to: '' };
     let cachedCampaignResults = null;
 
-    // ===== CONFIGURATION =====
-    const CONFIG = {
-        buttonColor: '#4CAF50',
-        buttonText: '🍆 TITAN GEL',
-        watermarkText: '🍆 TITAN GEL'
-    };
-
-    // Auto-refresh every 10 seconds (disabled when modal is open)
-    let autoRefreshTimer = setTimeout(function() {
-        location.reload();
-    }, 10000);
-
-    // Function to cancel auto-refresh
-    window.cancelAutoRefresh = function() {
-        if (autoRefreshTimer) {
-            clearTimeout(autoRefreshTimer);
-            autoRefreshTimer = null;
-        }
-    };
-
-    // Function to restart auto-refresh
-    window.restartAutoRefresh = function() {
-        // Clear any existing timer first
-        if (autoRefreshTimer) {
-            clearTimeout(autoRefreshTimer);
-        }
-        // Start new 10 second timer
-        autoRefreshTimer = setTimeout(function() {
-            location.reload();
-        }, 10000);
-    };
-
-    // ===== HELPER FUNCTIONS =====
-    
-    // Extract user ID from current page
-    function extractUserId() {
-        // Try to get from URL first
-        const urlMatch = window.location.href.match(/user\/(\d+)/);
-        if (urlMatch) {
-            return urlMatch[1];
-        }
-        
-        // Try to get from any link on the page
-        const links = document.querySelectorAll('a[href*="/user/"]');
-        for (const link of links) {
-            const linkMatch = link.href.match(/user\/(\d+)/);
-            if (linkMatch) {
-                return linkMatch[1];
-            }
-        }
-        
-        return null;
-    }
-
-    // Get date range from URL or form
-    function getDateRangeFromPage() {
-        // Try to get from URL parameters
-        const urlParams = new URLSearchParams(window.location.search);
-        const dFrom = urlParams.get('d_from');
-        const dTo = urlParams.get('d_to');
-        const dateSelect = urlParams.get('dateSelect');
-        
-        if (dFrom && dTo) {
-            return { from: dFrom, to: dTo, dateSelect: dateSelect || '0' };
-        }
-        
-        // Try to get from date input fields on the page
-        const fromInput = document.querySelector('input[name="d_from"]');
-        const toInput = document.querySelector('input[name="d_to"]');
-        
-        if (fromInput && toInput && fromInput.value && toInput.value) {
-            return { 
-                from: fromInput.value, 
-                to: toInput.value,
-                dateSelect: '0'
-            };
-        }
-        
-        // Default to today
-        const today = new Date().toISOString().split('T')[0];
-        return { from: today, to: today, dateSelect: '0' };
-    }
-
-    // Build conversion details URL
-    function buildConversionUrl(userId, offerId, dateRange) {
-        return `https://galaxywebrevenue2.com/user/${userId}/${offerId}/conversions-by-country?d_from=${dateRange.from}&d_to=${dateRange.to}&dateSelect=${dateRange.dateSelect}`;
-    }
-
-    // Extract offer ID from a table row
-    function extractOfferIdFromRow(row) {
-        // Look for offer ID in the first few cells
-        for (let i = 0; i < Math.min(3, row.cells.length); i++) {
-            const cell = row.cells[i];
-            
-            // Check for a link first
-            const link = cell.querySelector('a');
-            if (link && link.href) {
-                // Try to extract from link like /report/offer/1019/
-                const linkMatch = link.href.match(/\/offer\/(\d+)/);
-                if (linkMatch) {
-                    return linkMatch[1];
-                }
-            }
-            
-            // Try to parse text content as number
-            const text = cell.textContent.trim();
-            if (/^\d+$/.test(text)) {
-                const num = parseInt(text);
-                // Reasonable offer ID range (adjust if needed)
-                if (num > 900 && num < 10000) {
-                    return text;
-                }
-            }
-        }
-        
-        return null;
-    }
-
-    // ===== MAIN INITIALIZATION =====
-    window.addEventListener('load', function() {
-        enhanceReportTable();
-        createViewButton();
-        createToggleButton();
-    });
-
-    // ===== TOGGLE BUTTON CREATION =====
-    function createToggleButton() {
-        const toggleBtn = document.createElement('button');
-        toggleBtn.id = 'conversionToggleBtn';
-        // Set initial text based on current state
-        toggleBtn.textContent = showConversionRate ? '💊 Show Conversions' : '💊 Show Conv Rate';
-        toggleBtn.style.cssText = `
-            position: fixed;
-            top: 140px;
-            right: -300px;
-            z-index: 9999;
-            padding: 12px 24px;
-            background-color: #9C27B0;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            transition: all 0.3s ease;
-        `;
-
-        toggleBtn.onmouseover = () => {
-            toggleBtn.style.backgroundColor = '#7B1FA2';
-            toggleBtn.style.transform = 'scale(1.05)';
-        };
-
-        toggleBtn.onmouseout = () => {
-            toggleBtn.style.backgroundColor = '#9C27B0';
-            toggleBtn.style.transform = 'scale(1)';
-        };
-
-        toggleBtn.onclick = toggleConversionDisplay;
-        document.body.appendChild(toggleBtn);
-
-        // Extend hover zone to include toggle button
-        const hoverZone = document.getElementById('hoverZone');
-        if (hoverZone) {
-            hoverZone.style.height = '180px';
-        }
-
-        // Add hover functionality
-        const toggleHoverZone = document.createElement('div');
-        toggleHoverZone.id = 'toggleHoverZone';
-        toggleHoverZone.style.cssText = `
-            position: fixed;
-            top: 120px;
-            right: 0;
-            width: 200px;
-            height: 100px;
-            z-index: 9998;
-            pointer-events: all;
-        `;
-
-        toggleHoverZone.onmouseenter = () => {
-            toggleBtn.style.right = '20px';
-        };
-
-        toggleHoverZone.onmouseleave = () => {
-            setTimeout(() => {
-                const isOverButton = toggleBtn.matches(':hover');
-                if (!isOverButton) {
-                    toggleBtn.style.right = '-300px';
-                }
-            }, 100);
-        };
-
-        toggleBtn.onmouseleave = () => {
-            setTimeout(() => {
-                const isOverZone = toggleHoverZone.matches(':hover');
-                if (!isOverZone) {
-                    toggleBtn.style.right = '-300px';
-                }
-            }, 100);
-        };
-
-        document.body.appendChild(toggleHoverZone);
-    }
-
-    // ===== TOGGLE FUNCTIONALITY =====
-    function toggleConversionDisplay() {
-        showConversionRate = !showConversionRate;
-        // Save state to localStorage
-        localStorage.setItem('showConversionRate', showConversionRate.toString());
-
-        const toggleBtn = document.getElementById('conversionToggleBtn');
-
-        if (showConversionRate) {
-            toggleBtn.textContent = '💊 Show Conversions';
-        } else {
-            toggleBtn.textContent = '💊 Show Conv Rate';
-        }
-
-        enhanceReportTable();
-    }
-
-    // ===== ENHANCED REPORT TABLE =====
-    function enhanceReportTable() {
-        const table = document.querySelector('table');
-        if (!table) {
-            console.log('Table not found, retrying...');
-            setTimeout(enhanceReportTable, 500);
-            return;
-        }
-
-        const headerRow = table.querySelector('thead tr') || table.rows[0];
-        if (!headerRow) return;
-
-        const headers = Array.from(headerRow.cells);
-        const conversionsIndex = headers.findIndex(cell =>
-            cell.textContent.trim() === 'Conversions' || cell.textContent.trim() === 'Conversion Rate'
-        );
-
-        if (conversionsIndex === -1) {
-            console.log('Conversions column not found');
-            return;
-        }
-
-        const conversionsHeader = headers[conversionsIndex];
-
-        if (showConversionRate) {
-            conversionsHeader.textContent = 'Conversion Rate';
-            conversionsHeader.style.cssText = `
-                text-align: center !important;
-            `;
-        } else {
-            conversionsHeader.textContent = 'Conversions';
-            // Reset to default header styling (no special background)
-            conversionsHeader.style.cssText = `
-                text-align: center !important;
-            `;
-        }
-
-        const tbody = table.querySelector('tbody') || table;
-        const rows = Array.from(tbody.rows).slice(headerRow.parentElement.tagName === 'THEAD' ? 0 : 1);
-
-        let totalRow = null;
-        let totalUnique = 0;
-        let totalConversions = 0;
-
-        // Get user ID and date range for conversion links
-        const userId = extractUserId();
-        const dateRange = getDateRangeFromPage();
-
-        console.log('User ID:', userId, 'Date Range:', dateRange);
-
-        rows.forEach((row, rowIndex) => {
-            if (row.cells[0]?.textContent.trim() === 'Offer ID') return;
-
-            const isTotalRow = row.cells[0]?.textContent.trim() === 'TOTAL';
-
-            if (isTotalRow) {
-                totalRow = row;
-                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
-                const conversionsCell = row.cells[conversionsIndex];
-
-                if (uniqueCell && conversionsCell) {
-                    totalUnique = parseInt(uniqueCell.textContent.trim()) || 0;
-
-                    // Store original conversion value if not already stored
-                    if (!originalConversionsData[`total`]) {
-                        const originalText = conversionsCell.textContent.trim();
-                        if (!originalText.includes('%') && !originalText.includes('<')) {
-                            originalConversionsData[`total`] = originalText;
-                        }
-                    }
-
-                    if (showConversionRate) {
-                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
-                        currentConversions = totalConversions;
-
-                        let conversionRate = 0;
-                        let displayText = '0.00%';
-
-                        if (totalUnique > 0) {
-                            conversionRate = (totalConversions / totalUnique) * 100;
-                            displayText = conversionRate.toFixed(2) + '%';
-                        }
-
-                        conversionsCell.textContent = displayText;
-                        conversionsCell.style.cssText = `
-                            text-align: center !important;
-                        `;
-                    } else {
-                        // Show original conversions as plain text (TOTAL row not clickable)
-                        totalConversions = parseInt(originalConversionsData[`total`] || conversionsCell.textContent.trim()) || 0;
-                        currentConversions = totalConversions;
-                        conversionsCell.textContent = originalConversionsData[`total`] || totalConversions;
-                        conversionsCell.style.cssText = `
-                            text-align: center !important;
-                        `;
-                    }
-                }
-            } else {
-                // For non-TOTAL rows
-                const uniqueCell = row.cells[headers.findIndex(h => h.textContent.trim() === 'Unique')];
-                const conversionsCell = row.cells[conversionsIndex];
-
-                if (uniqueCell && conversionsCell) {
-                    const unique = parseInt(uniqueCell.textContent.trim()) || 0;
-
-                    // Store original conversion value
-                    if (!originalConversionsData[`row_${rowIndex}`]) {
-                        const originalText = conversionsCell.textContent.trim();
-                        if (!originalText.includes('%') && !originalText.includes('<')) {
-                            originalConversionsData[`row_${rowIndex}`] = originalText;
-                        }
-                    }
-
-                    if (showConversionRate) {
-                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || conversionsCell.textContent.trim()) || 0;
-
-                        if (unique > 0) {
-                            const rate = (conversions / unique) * 100;
-                            conversionsCell.textContent = rate.toFixed(2) + '%';
-                            conversionsCell.style.backgroundColor = '';
-                        } else {
-                            conversionsCell.textContent = '0.00%';
-                        }
-                        conversionsCell.style.cssText = `
-                            text-align: center !important;
-                        `;
-                    } else {
-                        // Show original conversions - make clickable if possible
-                        const conversions = parseInt(originalConversionsData[`row_${rowIndex}`] || '0');
-                        
-                        // Extract offer ID from this row
-                        const offerId = extractOfferIdFromRow(row);
-                        
-                        console.log('Row', rowIndex, 'Offer ID:', offerId, 'Conversions:', conversions, 'User ID:', userId);
-                        
-                        // Make clickable if we have all the necessary info and conversions > 0
-                        if (userId && offerId && conversions > 0) {
-                            const conversionUrl = buildConversionUrl(userId, offerId, dateRange);
-                            conversionsCell.innerHTML = `<a href="${conversionUrl}" style="color: #2196F3; text-decoration: none; cursor: pointer;">${conversions}</a>`;
-                            console.log('Created link:', conversionUrl);
-                        } else {
-                            conversionsCell.textContent = originalConversionsData[`row_${rowIndex}`] || '0';
-                        }
-                        
-                        conversionsCell.style.cssText = `
-                            text-align: center !important;
-                        `;
-                    }
-                }
-            }
-        });
-
-        // Handle snake animation based on toggle state
-        const existingSnake = document.getElementById('snakeAnimationRow');
-        if (existingSnake) {
-            existingSnake.remove();
-        }
-
-        if (totalRow && showConversionRate) {
-            createRealisticSnake(totalRow.parentNode, totalRow, totalConversions);
-        }
-
-        addGlobalStyles();
-        console.log('✅ Galaxy Web Revenue Enhanced - Toggle enabled with clickable conversions!');
-    }
-
-    // ===== SNAKE ANIMATION =====
-    function createRealisticSnake(parentNode, totalRow, conversions) {
-        const snakeRow = document.createElement('tr');
-        snakeRow.id = 'snakeAnimationRow';
-
-        const snakeCell = document.createElement('td');
-        const headerRow = parentNode.closest('table').querySelector('thead tr') || parentNode.closest('table').rows[0];
-        const colCount = headerRow.cells.length;
-        snakeCell.colSpan = colCount;
-
-        snakeCell.style.cssText = `
-            background: linear-gradient(135deg, #0f0f1e 0%, #1a1a2e 100%) !important;
-            padding: 20px 0 !important;
-            border-top: 2px solid #667eea !important;
-            overflow: hidden !important;
-            position: relative !important;
-        `;
-
-        let savedPosition = parseFloat(localStorage.getItem('snakePosition') || '0');
-
-        snakeCell.innerHTML = `
-            <div id="snakeContainer" style="position: relative; height: 80px; width: 100%; overflow: hidden;">
-                <div id="snakeWrapper" style="position: absolute; left: ${savedPosition}%; top: 50%; transform: translateY(-50%); display: flex; align-items: center; white-space: nowrap;">
-                    <svg width="120" height="60" viewBox="0 0 120 60" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));">
-                        <defs>
-                            <linearGradient id="snakeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                                <stop offset="0%" style="stop-color:#2d5016;stop-opacity:1" />
-                                <stop offset="50%" style="stop-color:#4a7c23;stop-opacity:1" />
-                                <stop offset="100%" style="stop-color:#2d5016;stop-opacity:1" />
-                            </linearGradient>
-                            <radialGradient id="eyeGradient">
-                                <stop offset="0%" style="stop-color:#ffff00;stop-opacity:1" />
-                                <stop offset="100%" style="stop-color:#ff0000;stop-opacity:1" />
-                            </radialGradient>
-                        </defs>
-                        <ellipse cx="10" cy="30" rx="6" ry="8" fill="url(#snakeGradient)">
-                            <animate attributeName="ry" values="8;10;8" dur="1s" repeatCount="indefinite"/>
-                        </ellipse>
-                        <ellipse cx="25" cy="30" rx="10" ry="12" fill="url(#snakeGradient)">
-                            <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite"/>
-                            <animate attributeName="ry" values="12;14;12" dur="1s" repeatCount="indefinite"/>
-                        </ellipse>
-                        <ellipse cx="42" cy="30" rx="11" ry="13" fill="url(#snakeGradient)">
-                            <animate attributeName="cy" values="30;32;30" dur="1s" repeatCount="indefinite" begin="0.2s"/>
-                            <animate attributeName="ry" values="13;15;13" dur="1s" repeatCount="indefinite" begin="0.2s"/>
-                        </ellipse>
-                        <ellipse cx="60" cy="30" rx="12" ry="14" fill="url(#snakeGradient)">
-                            <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite" begin="0.4s"/>
-                            <animate attributeName="ry" values="14;16;14" dur="1s" repeatCount="indefinite" begin="0.4s"/>
-                        </ellipse>
-                        <ellipse cx="78" cy="30" rx="11" ry="13" fill="url(#snakeGradient)">
-                            <animate attributeName="cy" values="30;32;30" dur="1s" repeatCount="indefinite" begin="0.6s"/>
-                            <animate attributeName="ry" values="13;15;13" dur="1s" repeatCount="indefinite" begin="0.6s"/>
-                        </ellipse>
-                        <ellipse cx="95" cy="30" rx="13" ry="15" fill="url(#snakeGradient)">
-                            <animate attributeName="cy" values="30;28;30" dur="1s" repeatCount="indefinite" begin="0.8s"/>
-                        </ellipse>
-                        <path d="M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45"
-                              fill="#3d6b1f" stroke="#2d5016" stroke-width="1">
-                            <animate attributeName="d"
-                                     values="M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45;
-                                             M 95 15 Q 106 20 111 25 Q 106 28 95 30 Q 106 32 111 35 Q 106 40 95 45;
-                                             M 95 15 Q 105 20 110 25 Q 105 28 95 30 Q 105 32 110 35 Q 105 40 95 45"
-                                     dur="1s" repeatCount="indefinite" begin="0.8s"/>
-                        </path>
-                        <circle cx="98" cy="25" r="3" fill="url(#eyeGradient)">
-                            <animate attributeName="cy" values="25;23;25" dur="1s" repeatCount="indefinite" begin="0.8s"/>
-                        </circle>
-                        <circle cx="98" cy="35" r="3" fill="url(#eyeGradient)">
-                            <animate attributeName="cy" values="35;33;35" dur="1s" repeatCount="indefinite" begin="0.8s"/>
-                        </circle>
-                        <circle cx="99" cy="25" r="1.5" fill="#000">
-                            <animate attributeName="cy" values="25;23;25" dur="1s" repeatCount="indefinite" begin="0.8s"/>
-                        </circle>
-                        <circle cx="99" cy="35" r="1.5" fill="#000">
-                            <animate attributeName="cy" values="35;33;35" dur="1s" repeatCount="indefinite" begin="0.8s"/>
-                        </circle>
-                        <path d="M 110 30 L 118 28 M 110 30 L 118 32" stroke="#ff0000" stroke-width="1.5" fill="none">
-                            <animate attributeName="d"
-                                     values="M 110 30 L 118 28 M 110 30 L 118 32;
-                                             M 110 30 L 116 28 M 110 30 L 116 32;
-                                             M 110 30 L 118 28 M 110 30 L 118 32"
-                                     dur="0.5s" repeatCount="indefinite"/>
-                        </path>
-                        <circle cx="30" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="35" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="48" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="53" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="66" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="71" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="84" cy="26" r="2" fill="#3d6b1f" opacity="0.6"/>
-                        <circle cx="89" cy="32" r="2" fill="#3d6b1f" opacity="0.6"/>
-                    </svg>
-                    <div style="
-                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                        color: white;
-                        font-size: 28px;
-                        font-weight: bold;
-                        padding: 8px 20px;
-                        border-radius: 50px;
-                        margin: 0 20px;
-                        box-shadow: 0 4px 15px rgba(102, 126, 234, 0.5);
-                        font-family: 'Arial Black', sans-serif;
-                        min-width: 60px;
-                        text-align: center;
-                    ">${conversions}</div>
-                </div>
-            </div>
-        `;
-
-        snakeRow.appendChild(snakeCell);
-
-        if (totalRow.nextSibling) {
-            parentNode.insertBefore(snakeRow, totalRow.nextSibling);
-        } else {
-            parentNode.appendChild(snakeRow);
-        }
-
-        animateSnake(savedPosition);
-    }
-
-    function animateSnake(startPosition) {
-        const wrapper = document.getElementById('snakeWrapper');
-        const container = document.getElementById('snakeContainer');
-
-        if (!wrapper || !container) return;
-
-        let position = startPosition;
-        const speed = 0.15;
-
-        function animate() {
-            position += speed;
-
-            if (position > 110) {
-                position = -30;
-            }
-
-            wrapper.style.left = position + '%';
-            localStorage.setItem('snakePosition', position.toString());
-
-            requestAnimationFrame(animate);
-        }
-
-        animate();
-    }
-
-    // ===== GLOBAL STYLES =====
-    function addGlobalStyles() {
-        if (document.getElementById('galaxyEnhancedStyles')) return;
-
-        const style = document.createElement('style');
-        style.id = 'galaxyEnhancedStyles';
-        style.textContent = `
-            body {
-                overflow-x: hidden !important;
-            }
-            table {
-                border-collapse: separate !important;
-                border-spacing: 0 !important;
-                box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
-                border-radius: 8px !important;
-                overflow: hidden !important;
-                background: rgba(255, 255, 255, 0.95) !important;
-            }
-            table th {
-                position: sticky !important;
-                top: 0 !important;
-                z-index: 10 !important;
-            }
-            table tbody tr:hover {
-                background-color: rgba(102, 126, 234, 0.05) !important;
-                transition: background-color 0.2s ease !important;
-            }
-            table td {
-                padding: 12px 10px !important;
-            }
-            table tbody tr:has(td:first-child:contains("TOTAL")) {
-                background: linear-gradient(90deg, #f9fafb 0%, #f3f4f6 100%) !important;
-                font-weight: 700 !important;
-                border-top: 3px solid #667eea !important;
-            }
-            table td:nth-child(3),
-            table td:nth-child(4),
-            table td:nth-child(5),
-            table td:nth-child(6),
-            table td:nth-child(7),
-            table td:nth-child(8) {
-                text-align: center !important;
-            }
-            table td a:hover {
-                text-decoration: underline !important;
-            }
-            @keyframes slideIn{from{transform:translateX(400px);opacity:0;}to{transform:translateX(0);opacity:1;}}
-            @keyframes slideOut{from{transform:translateX(0);opacity:1;}to{transform:translateX(400px);opacity:0;}}
-            @keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
-            @keyframes spin{to{transform:rotate(360deg);}}
-        `;
-        document.head.appendChild(style);
-    }
-
-    // ===== COUNTRY REPORTS FUNCTIONALITY (from second script) =====
-
+    const campaigns = [
+        { id: '946',  name: 'JLG - v1 - AU/IE/FR/IT' },
+        { id: '952',  name: 'BN - AU/IE/US/UK/CA' },
+        { id: '953',  name: 'BN - v2 - AU/IE/US/UK/CA' },
+        { id: '954',  name: 'BN - v3 - AU/IE/US/UK/CA' },
+        { id: '955',  name: 'JLG - v2 - AU/IE/FR/IT' },
+        { id: '956',  name: 'JLG - v3 - AU/IE/FR/IT' },
+        { id: '957',  name: 'NT - AU/IT' },
+        { id: '958',  name: 'HM - AU/FR/IT' },
+        { id: '960',  name: 'HM - v2 - AU/FR/IT' },
+        { id: '961',  name: 'JLG - v4 - AU/IE/FR/IT' },
+        { id: '962',  name: 'BE - v1 - AU/FR/IT/IE' },
+        { id: '963',  name: 'BE - v2 - AU/FR/IT/IE' },
+        { id: '964',  name: 'JLG - v5 - AU/IE/FR/IT' },
+        { id: '965',  name: 'NT - v2 - AU/IT' },
+        { id: '966',  name: 'JLG - v6 - AU/IE/FR/IT' },
+        { id: '967',  name: 'BE - v3 - AU/FR/IT/IE' },
+        { id: '968',  name: 'HM - v3 - AU/FR/IT' },
+        { id: '969',  name: 'JLG - v7 - AU/IE/FR/IT' },
+        { id: '970',  name: 'BE - v4 - AU/FR/IT/IE' },
+        { id: '971',  name: 'HM - v4 - AU/FR/IT' },
+        { id: '972',  name: 'BE - v5 - AU/CA/FR/IT/IE/NZ/ES' },
+        { id: '973',  name: 'BE - v6 - AU/CA/FR/IT/IE/NZ/ES' },
+        { id: '976',  name: 'JLG - v8 - AU/US/NZ/IR/CA/FR/IT' },
+        { id: '977',  name: 'BE - v7 - AU/CA/FR/IT/IE/NZ/ES' },
+        { id: '978',  name: 'HM - v5 - AU/CA/NZ/US/FR/IT/ES' },
+        { id: '981',  name: 'BE - XHP v1 - DK/FI/NO/SE Only' },
+        { id: '982',  name: 'BE - XHP v7 - DK/FI/NO/SE Only' },
+        { id: '983',  name: 'BE - XHP v6 - DK/FI/NO/SE Only' },
+        { id: '984',  name: 'BE - XHP v5 - DK/FI/NO/SE Only' },
+        { id: '985',  name: 'BE - XHP v4 - DK/FI/NO/SE Only' },
+        { id: '986',  name: 'BE - XHP v3 - DK/FI/NO/SE Only' },
+        { id: '987',  name: 'BE - XHP v2 - DK/FI/NO/SE Only' },
+        { id: '989',  name: 'ONF - NO CAP - AU/FR/IT/NZ' },
+        { id: '990',  name: 'ONF - XHP - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
+        { id: '1007', name: 'ONF - XHP - Germany' },
+        { id: '1008', name: 'ONF - XHP - Austria' },
+        { id: '1009', name: 'ONF - XXHP - Switzerland ONLY' },
+        { id: '1010', name: 'ONF - XHP - Belgium' },
+        { id: '1012', name: 'Nasty Hookups - XHP - Redirect Only - DE/AT/CH/BE/NL' },
+        { id: '1013', name: 'JLG - UNIVERSAL - NO CAP - AU/US/NZ/IE/CA/FR/IT' },
+        { id: '1014', name: 'ONF - XHPv1 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
+        { id: '1015', name: 'ONF - XHPv2 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
+        { id: '1016', name: 'ONF - XHPv3 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
+        { id: '1019', name: 'Flirt - US Only' },
+        { id: '1020', name: 'ONF - XHP-BONUS - Germany/Austria ONLY' },
+        { id: '1021', name: 'ONF - XXHP-BONUS - Switzerland ONLY' },
+        { id: '1022', name: 'ONF - XHP-BONUS - Belgium ONLY' },
+        { id: '1023', name: 'ONF - BONUS - Italy Only' },
+        { id: '1024', name: 'ONF - XHP-BONUS - DK/FI/NO/SE Only' }
+    ];
+
+    // ── Watermark ──────────────────────────────────────────────
     function createWatermark() {
-        const watermark = document.createElement('div');
-        watermark.className = 'modal-watermark';
-        watermark.textContent = CONFIG.watermarkText;
-        watermark.style.cssText = `
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%) rotate(-45deg);
-            font-size: 200px;
-            font-weight: 900;
-            color: rgba(255, 255, 255, 0.1);
-            white-space: nowrap;
-            pointer-events: none;
-            z-index: 1;
-            user-select: none;
-            text-transform: uppercase;
-            letter-spacing: 40px;
-        `;
-        return watermark;
+        const el = document.createElement('div');
+        el.textContent = CONFIG.watermarkText;
+        el.style.cssText = `
+            position:absolute;top:50%;left:50%;
+            transform:translate(-50%,-50%) rotate(-45deg);
+            font-size:200px;font-weight:900;
+            color:rgba(255,255,255,0.08);
+            white-space:nowrap;pointer-events:none;
+            z-index:2;user-select:none;
+            text-transform:uppercase;letter-spacing:40px;
+            text-shadow:0 0 60px rgba(0,0,0,0.8);`;
+        return el;
     }
 
-    function createChaseAnimation() {
-        const container = document.createElement('div');
-        container.className = 'chase-animation';
-        container.style.cssText = `
-            position: absolute;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            pointer-events: none;
-            z-index: 1;
-            overflow: hidden;
-        `;
-
-        const eggplant = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        eggplant.setAttribute('width', '50');
-        eggplant.setAttribute('height', '50');
-        eggplant.setAttribute('viewBox', '0 0 50 50');
-        eggplant.style.cssText = 'position: absolute;';
-        eggplant.innerHTML = `
-            <ellipse cx="25" cy="30" rx="12" ry="18" fill="#4a148c"/>
-            <ellipse cx="25" cy="12" rx="6" ry="4" fill="#1b5e20"/>
-            <rect x="23" y="8" width="4" height="8" fill="#2e7d32" rx="2"/>
-        `;
-
-        const cat = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-        cat.setAttribute('width', '60');
-        cat.setAttribute('height', '60');
-        cat.setAttribute('viewBox', '0 0 60 60');
-        cat.style.cssText = 'position: absolute;';
-        cat.innerHTML = `
-            <ellipse cx="30" cy="35" rx="15" ry="12" fill="#ff6f00"/>
-            <circle cx="30" cy="25" rx="12" ry="12" fill="#ff8f00"/>
-            <polygon points="20,18 18,8 24,20" fill="#ff6f00"/>
-            <polygon points="40,18 42,8 36,20" fill="#ff6f00"/>
-            <circle cx="25" cy="23" r="2" fill="#000"/>
-            <circle cx="35" cy="23" r="2" fill="#000"/>
-            <ellipse cx="30" cy="28" rx="1.5" ry="2" fill="#000"/>
-            <path d="M 25 30 Q 30 32 35 30" stroke="#000" fill="none" stroke-width="1"/>
-            <ellipse cx="15" cy="40" rx="3" ry="2" fill="#ff6f00"/>
-            <ellipse cx="45" cy="40" rx="3" ry="2" fill="#ff6f00"/>
-        `;
-
-        let eggplantX = Math.random() * (window.innerWidth - 50);
-        let eggplantY = Math.random() * (window.innerHeight - 50);
-        let catX = eggplantX - 80;
-        let catY = eggplantY;
-
-        let eggplantSpeedX = (Math.random() - 0.5) * 4 + 3;
-        let eggplantSpeedY = (Math.random() - 0.5) * 4;
-
-        function animate() {
-            eggplantX += eggplantSpeedX;
-            eggplantY += eggplantSpeedY;
-
-            if (eggplantX <= 0 || eggplantX >= window.innerWidth - 50) {
-                eggplantSpeedX = -eggplantSpeedX + (Math.random() - 0.5) * 2;
-                eggplantSpeedY += (Math.random() - 0.5) * 2;
-            }
-            if (eggplantY <= 0 || eggplantY >= window.innerHeight - 50) {
-                eggplantSpeedY = -eggplantSpeedY + (Math.random() - 0.5) * 2;
-                eggplantSpeedX += (Math.random() - 0.5) * 2;
-            }
-
-            eggplantSpeedX = Math.max(-5, Math.min(5, eggplantSpeedX));
-            eggplantSpeedY = Math.max(-5, Math.min(5, eggplantSpeedY));
-
-            const dx = eggplantX - catX;
-            const dy = eggplantY - catY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-
-            const catSpeedX = distance > 100 ? (dx / distance) * 4 : (dx / distance) * 2;
-            const catSpeedY = distance > 100 ? (dy / distance) * 4 : (dy / distance) * 2;
-
-            catX += catSpeedX;
-            catY += catSpeedY;
-
-            if (distance < 30 || Math.random() < 0.002) {
-                eggplantX = Math.random() * (window.innerWidth - 50);
-                eggplantY = Math.random() * (window.innerHeight - 50);
-                catX = eggplantX - 100;
-                catY = eggplantY;
-                eggplantSpeedX = (Math.random() - 0.5) * 4 + 3;
-                eggplantSpeedY = (Math.random() - 0.5) * 4;
-            }
-
-            eggplant.style.left = eggplantX + 'px';
-            eggplant.style.top = eggplantY + 'px';
-            cat.style.left = catX + 'px';
-            cat.style.top = catY + 'px';
-
-            eggplant.style.transform = eggplantSpeedX < 0 ? 'scaleX(-1)' : 'scaleX(1)';
-            cat.style.transform = catSpeedX < 0 ? 'scaleX(-1)' : 'scaleX(1)';
-
-            requestAnimationFrame(animate);
-        }
-
-        container.appendChild(eggplant);
-        container.appendChild(cat);
-        animate();
-
-        return container;
+    // ── Fullscreen GIF background ──────────────────────────────
+    function createGifBackground() {
+        const bg = document.createElement('div');
+        bg.style.cssText = `
+            position:absolute;top:0;left:0;width:100%;height:100%;
+            background-image:url('${CONFIG.bgGif}');
+            background-size:cover;
+            background-position:center center;
+            background-repeat:no-repeat;
+            pointer-events:none;
+            z-index:0;`;
+        return bg;
     }
 
-    function createModalBase(zIndex = 10000) {
+    // ── Dark overlay so content stays readable ─────────────────
+    function createOverlay() {
+        const ov = document.createElement('div');
+        ov.style.cssText = `
+            position:absolute;top:0;left:0;width:100%;height:100%;
+            background:rgba(0,0,0,0.55);
+            pointer-events:none;
+            z-index:1;`;
+        return ov;
+    }
+
+    // ── Modal base ─────────────────────────────────────────────
+    function createModalBase(zIndex=10000) {
         const modal = document.createElement('div');
         modal.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background-color: rgb(0, 0, 0);
-            z-index: ${zIndex};
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            animation: fadeIn 0.3s ease;
-        `;
-
+            position:fixed;top:0;left:0;width:100%;height:100%;
+            z-index:${zIndex};
+            display:flex;justify-content:center;align-items:center;
+            animation:fadeIn 0.3s ease;
+            overflow:hidden;`;
+        modal.appendChild(createGifBackground());
+        modal.appendChild(createOverlay());
         modal.appendChild(createWatermark());
-        modal.appendChild(createChaseAnimation());
-
         return modal;
     }
 
+    // ── Floating button ────────────────────────────────────────
     function createViewButton() {
         const button = document.createElement('button');
         button.id = 'countryReportsBtn';
         button.textContent = CONFIG.buttonText;
-        button.style.cssText = `
-            position: fixed;
-            top: 80px;
-            right: -250px;
-            z-index: 9999;
-            padding: 12px 24px;
-            background-color: ${CONFIG.buttonColor};
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: bold;
-            cursor: pointer;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            transition: all 0.3s ease;
-        `;
-
-        button.onmouseover = () => {
-            button.style.backgroundColor = '#45a049';
-            button.style.transform = 'scale(1.05)';
-        };
-
-        button.onmouseout = () => {
-            button.style.backgroundColor = CONFIG.buttonColor;
-            button.style.transform = 'scale(1)';
-        };
-
+        button.style.cssText = `position:fixed;top:80px;right:-250px;z-index:9999;padding:12px 24px;background-color:${CONFIG.buttonColor};color:white;border:none;border-radius:6px;font-size:14px;font-weight:bold;cursor:pointer;box-shadow:0 4px 6px rgba(0,0,0,0.1);transition:all 0.3s ease;`;
+        button.onmouseover = () => { button.style.backgroundColor='#f57c00'; button.style.transform='scale(1.05)'; };
+        button.onmouseout  = () => { button.style.backgroundColor=CONFIG.buttonColor; button.style.transform='scale(1)'; };
         button.onclick = showDatePickerModal;
         document.body.appendChild(button);
 
         const hoverZone = document.createElement('div');
-        hoverZone.id = 'hoverZone';
-        hoverZone.style.cssText = `
-            position: fixed;
-            top: 60px;
-            right: 0;
-            width: 200px;
-            height: 180px;
-            z-index: 9998;
-            pointer-events: all;
-        `;
-
-        hoverZone.onmouseenter = () => {
-            button.style.right = '20px';
-            const toggleBtn = document.getElementById('conversionToggleBtn');
-            if (toggleBtn) toggleBtn.style.right = '20px';
-        };
-
-        hoverZone.onmouseleave = () => {
-            setTimeout(() => {
-                const isOverButton = button.matches(':hover');
-                const toggleBtn = document.getElementById('conversionToggleBtn');
-                const isOverToggle = toggleBtn ? toggleBtn.matches(':hover') : false;
-                if (!isOverButton && !isOverToggle) {
-                    button.style.right = '-250px';
-                    if (toggleBtn) toggleBtn.style.right = '-300px';
-                }
-            }, 100);
-        };
-
-        button.onmouseleave = () => {
-            setTimeout(() => {
-                const isOverZone = hoverZone.matches(':hover');
-                const toggleBtn = document.getElementById('conversionToggleBtn');
-                const isOverToggle = toggleBtn ? toggleBtn.matches(':hover') : false;
-                if (!isOverZone && !isOverToggle) {
-                    button.style.right = '-250px';
-                }
-            }, 100);
-        };
-
+        hoverZone.style.cssText = `position:fixed;top:60px;right:0;width:200px;height:100px;z-index:9998;pointer-events:all;`;
+        hoverZone.onmouseenter = () => { button.style.right='20px'; };
+        hoverZone.onmouseleave = () => { setTimeout(()=>{ if(!button.matches(':hover')) button.style.right='-250px'; },100); };
+        button.onmouseleave = () => { setTimeout(()=>{ if(!hoverZone.matches(':hover')) button.style.right='-250px'; },100); };
         document.body.appendChild(hoverZone);
     }
 
+    // ── Date picker ────────────────────────────────────────────
     function showDatePickerModal() {
-        // Cancel auto-refresh when modal opens
-        window.cancelAutoRefresh();
-
         const modal = createModalBase(10000);
         modal.id = 'datePickerModal';
-
         const today = new Date().toISOString().split('T')[0];
 
         const content = document.createElement('div');
-        content.style.cssText = `
-            position: relative;
-            z-index: 2;
-            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
-            color: #ffffff;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 50px rgba(0,0,0,0.5);
-            border: 2px solid #ffd700;
-            min-width: 400px;
-        `;
-
+        content.style.cssText = `position:relative;z-index:3;background:linear-gradient(135deg,rgba(26,26,26,0.97) 0%,rgba(45,45,45,0.97) 100%);color:#fff;padding:40px;border-radius:12px;box-shadow:0 10px 50px rgba(0,0,0,0.7);border:2px solid #ff9800;min-width:400px;backdrop-filter:blur(4px);`;
         content.innerHTML = `
-            <h2 style="margin: 0 0 20px 0; color: #ffd700; text-align: center;">🌍 Select Date Range</h2>
-            <div style="margin-bottom: 20px;">
-                <label style="display: block; margin-bottom: 8px; color: #aaa;">From Date:</label>
-                <input type="date" id="dateFrom" value="${today}" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #333; color: white; font-size: 14px;">
+            <h2 style="margin:0 0 20px 0;color:#ff9800;text-align:center;">🎯 Select Date Range</h2>
+            <div style="margin-bottom:20px;">
+                <label style="display:block;margin-bottom:8px;color:#aaa;">From Date:</label>
+                <input type="date" id="dateFrom" value="${today}" style="width:100%;padding:10px;border-radius:6px;border:1px solid #555;background:#333;color:white;font-size:14px;">
             </div>
-            <div style="margin-bottom: 30px;">
-                <label style="display: block; margin-bottom: 8px; color: #aaa;">To Date:</label>
-                <input type="date" id="dateTo" value="${today}" style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #333; color: white; font-size: 14px;">
+            <div style="margin-bottom:30px;">
+                <label style="display:block;margin-bottom:8px;color:#aaa;">To Date:</label>
+                <input type="date" id="dateTo" value="${today}" style="width:100%;padding:10px;border-radius:6px;border:1px solid #555;background:#333;color:white;font-size:14px;">
             </div>
-            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-bottom: 20px;">
-                <button id="todayBtn" style="padding: 10px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Today</button>
-                <button id="yesterdayBtn" style="padding: 10px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Yesterday</button>
-                <button id="last7daysBtn" style="padding: 10px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Last 7 Days</button>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:20px;">
+                <button id="todayBtn"     style="padding:10px;background:#2196F3;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Today</button>
+                <button id="yesterdayBtn" style="padding:10px;background:#2196F3;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Yesterday</button>
+                <button id="last7daysBtn" style="padding:10px;background:#2196F3;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Last 7 Days</button>
             </div>
-            <div style="display: flex; gap: 10px;">
-                <button id="fetchBtn" style="flex: 1; padding: 14px; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 16px;">📊 Fetch Reports</button>
-                <button id="cancelBtn" style="padding: 14px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Cancel</button>
-            </div>
-            <div id="loadingIndicator" style="display: none; margin-top: 20px; text-align: center; color: #ffd700;">
-                <div style="display: inline-block; width: 20px; height: 20px; border: 3px solid #ffd700; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                <p style="margin-top: 10px;">Fetching data...</p>
-            </div>
-        `;
+            <div style="display:flex;gap:10px;">
+                <button id="nextBtn"   style="flex:1;padding:14px;background:linear-gradient(135deg,#ff9800,#f57c00);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:16px;">🎯 Select Campaigns →</button>
+                <button id="cancelBtn" style="padding:14px 20px;background:#f44336;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Cancel</button>
+            </div>`;
 
-        modal.appendChild(content);
-        document.body.appendChild(modal);
+        modal.appendChild(content); document.body.appendChild(modal);
 
-        document.getElementById('todayBtn').onclick = () => {
-            const today = new Date().toISOString().split('T')[0];
-            document.getElementById('dateFrom').value = today;
-            document.getElementById('dateTo').value = today;
+        document.getElementById('todayBtn').onclick = () => { const d=new Date().toISOString().split('T')[0]; document.getElementById('dateFrom').value=d; document.getElementById('dateTo').value=d; };
+        document.getElementById('yesterdayBtn').onclick = () => { const y=new Date(); y.setDate(y.getDate()-1); const d=y.toISOString().split('T')[0]; document.getElementById('dateFrom').value=d; document.getElementById('dateTo').value=d; };
+        document.getElementById('last7daysBtn').onclick = () => { const to=new Date(),from=new Date(); from.setDate(from.getDate()-7); document.getElementById('dateFrom').value=from.toISOString().split('T')[0]; document.getElementById('dateTo').value=to.toISOString().split('T')[0]; };
+        document.getElementById('nextBtn').onclick = () => {
+            currentDateRange = { from: document.getElementById('dateFrom').value, to: document.getElementById('dateTo').value };
+            cachedCampaignResults = null; modal.remove(); showCampaignsModal();
         };
-
-        document.getElementById('yesterdayBtn').onclick = () => {
-            const yesterday = new Date();
-            yesterday.setDate(yesterday.getDate() - 1);
-            const dateStr = yesterday.toISOString().split('T')[0];
-            document.getElementById('dateFrom').value = dateStr;
-            document.getElementById('dateTo').value = dateStr;
-        };
-
-        document.getElementById('last7daysBtn').onclick = () => {
-            const today = new Date();
-            const weekAgo = new Date();
-            weekAgo.setDate(weekAgo.getDate() - 7);
-            document.getElementById('dateFrom').value = weekAgo.toISOString().split('T')[0];
-            document.getElementById('dateTo').value = today.toISOString().split('T')[0];
-        };
-
-        document.getElementById('fetchBtn').onclick = () => {
-            const dateFrom = document.getElementById('dateFrom').value;
-            const dateTo = document.getElementById('dateTo').value;
-            fetchCountryReports(dateFrom, dateTo);
-        };
-
-        document.getElementById('cancelBtn').onclick = () => {
-            modal.remove();
-            window.restartAutoRefresh();
-        };
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                modal.remove();
-                window.restartAutoRefresh();
-            }
-        };
+        document.getElementById('cancelBtn').onclick = () => modal.remove();
+        modal.onclick = (e) => { if(e.target===modal) modal.remove(); };
     }
 
-    function fetchCountryReports(dateFrom, dateTo) {
-        const loadingIndicator = document.getElementById('loadingIndicator');
-        loadingIndicator.style.display = 'block';
-
-        currentDateRange = { from: dateFrom, to: dateTo };
-        cachedCampaignResults = null;
-
-        const url = `https://galaxywebrevenue2.com/report/offer/conversions-by-country?filter=country&d_from=${dateFrom}&d_to=${dateTo}&dateSelect=0`;
-
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: url,
-            onload: function(response) {
-                loadingIndicator.style.display = 'none';
-
-                if (response.status === 200) {
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(response.responseText, 'text/html');
-                    const data = parseCountryData(doc);
-
-                    if (data && data.length > 0) {
-                        currentData = data;
-                        document.getElementById('datePickerModal').remove();
-                        displayResults(data, `Conversions By Country (${dateFrom} to ${dateTo})`);
-                    } else {
-                        alert('No data found for the selected date range.');
-                    }
-                } else {
-                    alert('Failed to fetch data. Please make sure you are logged in.');
-                }
-            },
-            onerror: function() {
-                alert('Network error. Please try again.');
-                loadingIndicator.style.display = 'none';
-            }
-        });
-    }
-
+    // ── Fetch one campaign ─────────────────────────────────────
     function fetchCampaignConversions(offerId) {
         return new Promise((resolve, reject) => {
             const url = `https://galaxywebrevenue2.com/report/offer/${offerId}/conversions-by-country?filter=country&d_from=${currentDateRange.from}&d_to=${currentDateRange.to}&dateSelect=0`;
-
             GM_xmlhttpRequest({
-                method: 'GET',
-                url: url,
-                onload: function(response) {
-                    if (response.status === 200) {
-                        const parser = new DOMParser();
-                        const doc = parser.parseFromString(response.responseText, 'text/html');
-
-                        const titleElement = doc.querySelector('h1, .page-title, title');
-                        const campaignName = titleElement ? titleElement.textContent.trim() : `Campaign ${offerId}`;
-
-                        const data = parseCountryData(doc);
-                        resolve({ offerId, campaignName, data });
-                    } else {
-                        reject(new Error(`Failed to fetch campaign ${offerId}`));
-                    }
+                method: 'GET', url,
+                onload(response) {
+                    if(response.status===200) {
+                        const doc = new DOMParser().parseFromString(response.responseText,'text/html');
+                        const titleEl = doc.querySelector('h1,.page-title,title');
+                        const campaignName = titleEl ? titleEl.textContent.trim() : `Campaign ${offerId}`;
+                        resolve({ offerId, campaignName, data: parseCountryData(doc) });
+                    } else reject(new Error(`Failed ${offerId}`));
                 },
-                onerror: function() {
-                    reject(new Error(`Network error for campaign ${offerId}`));
-                }
+                onerror() { reject(new Error(`Network error ${offerId}`)); }
             });
         });
     }
 
+    // ── Campaign selector modal ────────────────────────────────
     function showCampaignsModal() {
-        // Cancel auto-refresh when modal opens
-        window.cancelAutoRefresh();
-
         const modal = createModalBase(10001);
         modal.id = 'campaignsModal';
 
         const content = document.createElement('div');
-        content.style.cssText = `
-            position: relative;
-            z-index: 2;
-            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
-            color: #ffffff;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 50px rgba(0,0,0,0.5);
-            border: 2px solid #ff9800;
-            min-width: 500px;
-            max-width: 90%;
-            max-height: 90vh;
-            overflow-y: auto;
-        `;
-
+        content.style.cssText = `position:relative;z-index:3;background:linear-gradient(135deg,rgba(26,26,26,0.97) 0%,rgba(45,45,45,0.97) 100%);color:#fff;padding:40px;border-radius:12px;box-shadow:0 10px 50px rgba(0,0,0,0.7);border:2px solid #ff9800;min-width:500px;max-width:90%;max-height:90vh;overflow-y:auto;backdrop-filter:blur(4px);`;
         content.innerHTML = `
-            <h2 style="margin: 0 0 20px 0; color: #ff9800; text-align: center;">🎯 Select Campaigns to View</h2>
+            <h2 style="margin:0 0 5px 0;color:#ff9800;text-align:center;">🎯 Select Campaigns to View</h2>
+            <p style="color:#aaa;text-align:center;margin:0 0 20px 0;font-size:13px;">Date range: ${currentDateRange.from} → ${currentDateRange.to}</p>
             <div id="campaignSelectionArea">
-                <div style="margin-bottom: 20px;">
-                    <input type="text" id="campaignSearch" placeholder="Search campaigns..." style="width: 100%; padding: 10px; border-radius: 6px; border: 1px solid #555; background: #333; color: white; font-size: 14px; margin-bottom: 15px;">
-                    <div style="display: flex; gap: 10px; margin-bottom: 15px;">
-                        <button id="selectAllCampaigns" style="flex: 1; padding: 8px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 12px;">Select All</button>
-                        <button id="deselectAllCampaigns" style="flex: 1; padding: 8px; background: #666; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 12px;">Deselect All</button>
-                    </div>
+                <input type="text" id="campaignSearch" placeholder="Search campaigns..." style="width:100%;padding:10px;border-radius:6px;border:1px solid #555;background:#333;color:white;font-size:14px;margin-bottom:10px;box-sizing:border-box;">
+                <div style="display:flex;gap:10px;margin-bottom:12px;">
+                    <button id="selectAllCampaigns"   style="flex:1;padding:8px;background:#2196F3;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:12px;">Select All</button>
+                    <button id="deselectAllCampaigns" style="flex:1;padding:8px;background:#666;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:12px;">Deselect All</button>
                 </div>
-                <div id="campaignsList" style="max-height: 400px; overflow-y: auto; margin-bottom: 20px; border: 1px solid #444; border-radius: 6px; padding: 10px; background: #0a0a0a;">
+                <div id="campaignsList" style="max-height:380px;overflow-y:auto;margin-bottom:15px;border:1px solid #444;border-radius:6px;padding:10px;background:#0a0a0a;"></div>
+                <div id="campaignLoadingIndicator" style="display:none;margin:20px 0;text-align:center;color:#ff9800;">
+                    <div style="display:inline-block;width:20px;height:20px;border:3px solid #ff9800;border-top-color:transparent;border-radius:50%;animation:spin 1s linear infinite;"></div>
+                    <p style="margin-top:10px;">Loading campaigns data...</p>
+                    <p id="campaignProgress" style="margin-top:5px;font-size:12px;color:#aaa;"></p>
                 </div>
-                <div id="campaignLoadingIndicator" style="display: none; margin: 20px 0; text-align: center; color: #ff9800;">
-                    <div style="display: inline-block; width: 20px; height: 20px; border: 3px solid #ff9800; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite;"></div>
-                    <p style="margin-top: 10px;">Loading campaigns data...</p>
-                    <p id="campaignProgress" style="margin-top: 5px; font-size: 12px; color: #aaa;"></p>
-                </div>
-                <div style="display: flex; gap: 10px;">
-                    <button id="fetchCampaignsBtn" style="flex: 1; padding: 14px; background: linear-gradient(135deg, #ff9800, #f57c00); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 16px;">📊 Fetch Selected Campaigns</button>
-                    <button id="closeCampaignsModal" style="padding: 14px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Close</button>
+                <div style="display:flex;gap:10px;">
+                    <button id="backToDateBtn"       style="padding:14px 20px;background:#9C27B0;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">← Back</button>
+                    <button id="fetchCampaignsBtn"   style="flex:1;padding:14px;background:linear-gradient(135deg,#ff9800,#f57c00);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:16px;">📊 Fetch Selected Campaigns</button>
+                    <button id="closeCampaignsModal" style="padding:14px 20px;background:#f44336;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Close</button>
                 </div>
             </div>
-            <div id="campaignResults" style="display: none;"></div>
-        `;
+            <div id="campaignResults" style="display:none;"></div>`;
 
-        modal.appendChild(content);
-        document.body.appendChild(modal);
+        modal.appendChild(content); document.body.appendChild(modal);
 
-        const campaigns = [
-            { id: '962', name: 'BE - v1 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '963', name: 'BE - v2 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '967', name: 'BE - v3 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '970', name: 'BE - v4 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '952', name: 'BN - AU/IE/US/UK/CA' },
-            { id: '953', name: 'BN - v2 - AU/IE/US/UK/CA' },
-            { id: '954', name: 'BN - v3 - AU/IE/US/UK/CA' },
-            { id: '958', name: 'HM - AU/CA/NZ/US/FR/IT/ES' },
-            { id: '960', name: 'HM - v2 - AU/CA/NZ/US/FR/IT/ES' },
-            { id: '968', name: 'HM - v3 - AU/CA/NZ/US/FR/IT/ES' },
-            { id: '971', name: 'HM - v4 - AU/CA/NZ/US/FR/IT/ES' },
-            { id: '946', name: 'JLG - v1 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '955', name: 'JLG - v2 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '956', name: 'JLG - v3 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '961', name: 'JLG - v4 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '964', name: 'JLG - v5 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '966', name: 'JLG - v6 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '969', name: 'JLG - v7 - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '957', name: 'NT - AUS/IT/CAN' },
-            { id: '965', name: 'NT - v2 - AUS/IT/CAN' },
-            { id: '972', name: 'BE - v5 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '973', name: 'BE - v6 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '976', name: 'JLG - v8 - AU/US/NZ/IR/CA/FR/IT' },
-            { id: '977', name: 'BE - v7 - AU/CA/FR/IT/IE/NZ/ES' },
-            { id: '978', name: 'HM - v5 - AU/CA/NZ/US/FR/IT/ES' },
-            { id: '981', name: 'BE - XHP v1 - DK/FI/NO/SE Only' },
-            { id: '982', name: 'BE - XHP v7 - DK/FI/NO/SE Only' },
-            { id: '983', name: 'BE - XHP v6 - DK/FI/NO/SE Only' },
-            { id: '984', name: 'BE - XHP v5 - DK/FI/NO/SE Only' },
-            { id: '985', name: 'BE - XHP v4 - DK/FI/NO/SE Only' },
-            { id: '986', name: 'BE - XHP v3 - DK/FI/NO/SE Only' },
-            { id: '987', name: 'BE - XHP v2 - DK/FI/NO/SE Only' },
-            { id: '989', name: 'ONF - NO CAP - US/AU/FR/IT/NZ' },
-            { id: '990', name: 'ONF - XHP - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-            { id: '1007', name: 'ONF - XHP - Germany' },
-            { id: '1008', name: 'ONF - XHP - Austria' },
-            { id: '1009', name: 'ONF - XXHP - Switzerland ONLY' },
-            { id: '1010', name: 'ONF - XHP - Belgium' },
-            { id: '1012', name: 'Nasty Hookups - XHP - Redirect Only - DE/AT/CH/BE/NL' },
-            { id: '1013', name: 'JLG - UNIVERSAL - NO CAP - AU/US/NZ/IE/CA/FR/IT' },
-            { id: '1014', name: 'ONF - XHPv1 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-            { id: '1015', name: 'ONF - XHPv2 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-            { id: '1016', name: 'ONF - XHPv3 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-            { id: '1017', name: 'ONF - ES/GB Only - NO CAP' },
-            { id: '1018', name: 'ONF - XHP - NO CAP - Taiwan/Japan/South Korea' },
-            { id: '1019', name: 'Flirt - US Only' },
-            { id: '1020', name: 'ONF - XHP-BONUS - Germany/Austria ONLY' },
-            { id: '1021', name: 'ONF - XXHP-BONUS - Switzerland ONLY' },
-            { id: '1022', name: 'ONF - XHP-BONUS - Belgium ONLY' },
-            { id: '1023', name: 'ONF - BONUS - Italy Only' },
-            { id: '1024', name: 'ONF - XHP-BONUS - Denmark/Finland/Norway/Sweden Only' }
-        ];
-
-        const campaignsList = document.getElementById('campaignsList');
-        campaigns.forEach(campaign => {
+        const list = document.getElementById('campaignsList');
+        campaigns.forEach(c => {
             const div = document.createElement('div');
             div.className = 'campaign-item';
-            div.style.cssText = `
-                padding: 10px;
-                margin-bottom: 8px;
-                background: #1a1a1a;
-                border-radius: 6px;
-                border: 1px solid #333;
-                transition: all 0.2s;
-            `;
-            div.innerHTML = `
-                <label style="display: flex; align-items: center; cursor: pointer; user-select: none;">
-                    <input type="checkbox" class="campaign-checkbox" data-id="${campaign.id}" style="margin-right: 10px; width: 18px; height: 18px; cursor: pointer;">
-                    <span style="color: #ff9800; font-weight: bold; margin-right: 8px;">${campaign.id}</span>
-                    <span style="color: #ddd; flex: 1;">${campaign.name}</span>
-                </label>
-            `;
-            div.onmouseover = () => {
-                div.style.background = '#252525';
-                div.style.borderColor = '#ff9800';
-            };
-            div.onmouseout = () => {
-                div.style.background = '#1a1a1a';
-                div.style.borderColor = '#333';
-            };
-            campaignsList.appendChild(div);
+            div.style.cssText = `padding:10px;margin-bottom:8px;background:#1a1a1a;border-radius:6px;border:1px solid #333;transition:all 0.2s;`;
+            div.innerHTML = `<label style="display:flex;align-items:center;cursor:pointer;user-select:none;">
+                <input type="checkbox" class="campaign-checkbox" data-id="${c.id}" style="margin-right:10px;width:18px;height:18px;cursor:pointer;">
+                <span style="color:#ff9800;font-weight:bold;margin-right:8px;">${c.id}</span>
+                <span style="color:#ddd;flex:1;">${c.name}</span>
+            </label>`;
+            div.onmouseover = () => { div.style.background='#252525'; div.style.borderColor='#ff9800'; };
+            div.onmouseout  = () => { div.style.background='#1a1a1a'; div.style.borderColor='#333'; };
+            list.appendChild(div);
         });
 
         document.getElementById('campaignSearch').oninput = (e) => {
-            const searchTerm = e.target.value.toLowerCase();
-            document.querySelectorAll('.campaign-item').forEach(item => {
-                const text = item.textContent.toLowerCase();
-                item.style.display = text.includes(searchTerm) ? 'block' : 'none';
-            });
+            const t = e.target.value.toLowerCase();
+            document.querySelectorAll('.campaign-item').forEach(item => { item.style.display = item.textContent.toLowerCase().includes(t)?'block':'none'; });
         };
-
-        document.getElementById('selectAllCampaigns').onclick = () => {
-            document.querySelectorAll('.campaign-checkbox').forEach(cb => {
-                if (cb.closest('.campaign-item').style.display !== 'none') {
-                    cb.checked = true;
-                }
-            });
-        };
-
-        document.getElementById('deselectAllCampaigns').onclick = () => {
-            document.querySelectorAll('.campaign-checkbox').forEach(cb => cb.checked = false);
-        };
+        document.getElementById('selectAllCampaigns').onclick   = () => { document.querySelectorAll('.campaign-checkbox').forEach(cb => { if(cb.closest('.campaign-item').style.display!=='none') cb.checked=true; }); };
+        document.getElementById('deselectAllCampaigns').onclick = () => { document.querySelectorAll('.campaign-checkbox').forEach(cb => cb.checked=false); };
+        document.getElementById('backToDateBtn').onclick        = () => { modal.remove(); showDatePickerModal(); };
+        document.getElementById('closeCampaignsModal').onclick  = () => modal.remove();
 
         document.getElementById('fetchCampaignsBtn').onclick = async () => {
-            const selectedIds = Array.from(document.querySelectorAll('.campaign-checkbox:checked'))
-                .map(cb => cb.dataset.id);
-
-            if (selectedIds.length === 0) {
-                alert('Please select at least one campaign');
-                return;
-            }
+            const selectedIds = Array.from(document.querySelectorAll('.campaign-checkbox:checked')).map(cb => cb.dataset.id);
+            if(selectedIds.length===0) { alert('Please select at least one campaign'); return; }
 
             const loadingIndicator = document.getElementById('campaignLoadingIndicator');
-            const progressText = document.getElementById('campaignProgress');
-            const selectionArea = document.getElementById('campaignSelectionArea');
-
+            const progressText     = document.getElementById('campaignProgress');
+            const selectionArea    = document.getElementById('campaignSelectionArea');
             loadingIndicator.style.display = 'block';
+            selectionArea.querySelectorAll('button,input').forEach(el => el.disabled=true);
 
-            const results = [];
-            let completed = 0;
-
-            for (const id of selectedIds) {
+            const results = []; let completed = 0;
+            for(const id of selectedIds) {
                 try {
-                    progressText.textContent = `Loading ${completed + 1} of ${selectedIds.length}...`;
-                    const result = await fetchCampaignConversions(id);
-                    results.push(result);
-                } catch (error) {
-                    console.error(`Error fetching campaign ${id}:`, error);
-                }
+                    progressText.textContent = `Loading ${completed+1} of ${selectedIds.length}...`;
+                    results.push(await fetchCampaignConversions(id));
+                } catch(err) { console.error(`Error fetching campaign ${id}:`,err); }
                 completed++;
             }
 
             loadingIndicator.style.display = 'none';
-
-            selectionArea.style.display = 'none';
+            selectionArea.style.display    = 'none';
             cachedCampaignResults = results;
             displayCampaignResults(results, modal);
         };
 
-        document.getElementById('closeCampaignsModal').onclick = () => {
-            modal.remove();
-            window.restartAutoRefresh();
-        };
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                modal.remove();
-                window.restartAutoRefresh();
-            }
-        };
+        modal.onclick = (e) => { if(e.target===modal) modal.remove(); };
     }
 
+    // ── Aggregate country totals across all campaigns ──────────
+    function buildCountryTotals(results) {
+        const map = {};
+        results.forEach(campaign => {
+            campaign.data.forEach(row => {
+                const country = row['Country'] || 'Unknown';
+                if(!map[country]) map[country] = { country, conversions:0, clicks:0, uniqueClicks:0 };
+                map[country].conversions  += parseInt(row['Conversions'])   || 0;
+                map[country].clicks       += parseInt(row['Clicks'])        || 0;
+                map[country].uniqueClicks += parseInt(row['Unique Clicks']) || 0;
+            });
+        });
+        return Object.values(map).sort((a,b) => b.conversions - a.conversions);
+    }
+
+    // ── Campaign results + grand summary ──────────────────────
     function displayCampaignResults(results, parentModal) {
         const resultsDiv = document.getElementById('campaignResults');
-        resultsDiv.style.cssText = 'display: block; position: relative; z-index: 2;';
+        resultsDiv.style.cssText = 'display:block;position:relative;z-index:3;';
 
-        const campaignsWithConversions = results.filter(campaign => {
-            const totalConversions = campaign.data.reduce((sum, row) => sum + (parseInt(row['Conversions']) || 0), 0);
-            return totalConversions > 0;
+        const withConversions  = results.filter(c => c.data.reduce((s,r)=>s+(parseInt(r['Conversions'])||0),0) > 0);
+        const grandTotal       = results.reduce((s,c) => s+c.data.reduce((ss,r)=>ss+(parseInt(r['Conversions'])||0),0), 0);
+        const grandClicks      = results.reduce((s,c) => s+c.data.reduce((ss,r)=>ss+(parseInt(r['Clicks'])||0),0), 0);
+        const countryTotals    = buildCountryTotals(withConversions);
+        const grandCountryConv = countryTotals.reduce((s,r) => s+r.conversions, 0);
+        const grandCountryClk  = countryTotals.reduce((s,r) => s+r.clicks, 0);
+        const grandCountryUQ   = countryTotals.reduce((s,r) => s+r.uniqueClicks, 0);
+
+        let countryRows = '';
+        countryTotals.forEach((row, idx) => {
+            const bg       = idx%2===0 ? '#1a1a1a' : '#252525';
+            const share    = grandCountryConv > 0 ? ((row.conversions/grandCountryConv)*100).toFixed(1) : '0.0';
+            const barWidth = grandCountryConv > 0 ? Math.round((row.conversions/grandCountryConv)*100) : 0;
+            countryRows += `
+                <tr style="background:${bg};" onmouseover="this.style.background='#333'" onmouseout="this.style.background='${bg}'">
+                    <td style="padding:9px 12px;border-bottom:1px solid #333;color:#aaa;">${idx+1}</td>
+                    <td style="padding:9px 12px;border-bottom:1px solid #333;font-weight:bold;">
+                        ${row.country}
+                        <div style="margin-top:4px;height:4px;background:#333;border-radius:2px;width:120px;">
+                            <div style="height:4px;background:#ff9800;border-radius:2px;width:${barWidth}%;"></div>
+                        </div>
+                    </td>
+                    <td style="padding:9px 12px;border-bottom:1px solid #333;text-align:right;color:#4CAF50;font-weight:bold;font-size:14px;">${row.conversions}</td>
+                    <td style="padding:9px 12px;border-bottom:1px solid #333;text-align:right;color:#aaa;">${share}%</td>
+                    <td style="padding:9px 12px;border-bottom:1px solid #333;text-align:right;color:#2196F3;">${row.clicks}</td>
+                    <td style="padding:9px 12px;border-bottom:1px solid #333;text-align:right;color:#FF9800;">${row.uniqueClicks}</td>
+                </tr>`;
         });
 
-        let html = '<h3 style="color: #ff9800; margin: 20px 0 10px 0;">Campaign Results:</h3>';
-
-        if (campaignsWithConversions.length === 0) {
-            html += '<p style="color: #aaa; text-align: center; padding: 20px;">No campaigns with conversions found for the selected date range.</p>';
+        let campaignCards = '';
+        if(withConversions.length===0) {
+            campaignCards = '<p style="color:#aaa;text-align:center;padding:20px;">No campaigns with conversions found for the selected date range.</p>';
         } else {
-            html += `<p style="color: #aaa; margin-bottom: 15px;">Showing ${campaignsWithConversions.length} campaign(s) with conversions out of ${results.length} fetched.</p>`;
-
-            campaignsWithConversions.forEach(campaign => {
-                const totalConversions = campaign.data.reduce((sum, row) => sum + (parseInt(row['Conversions']) || 0), 0);
-                const totalClicks = campaign.data.reduce((sum, row) => sum + (parseInt(row['Clicks']) || 0), 0);
-
-                html += `
-                    <div style="background: #0a0a0a; padding: 15px; margin-bottom: 15px; border-radius: 6px; border: 1px solid #444;">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+            withConversions.forEach(campaign => {
+                const totalConv = campaign.data.reduce((s,r)=>s+(parseInt(r['Conversions'])||0),0);
+                const totalClk  = campaign.data.reduce((s,r)=>s+(parseInt(r['Clicks'])||0),0);
+                campaignCards += `
+                    <div style="background:#0a0a0a;padding:15px;margin-bottom:12px;border-radius:6px;border:1px solid #444;">
+                        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
                             <div>
-                                <span style="color: #ff9800; font-weight: bold; font-size: 16px;">${campaign.offerId}</span>
-                                <span style="color: #ddd; margin-left: 10px;">${campaign.campaignName}</span>
+                                <span style="color:#ff9800;font-weight:bold;font-size:16px;">${campaign.offerId}</span>
+                                <span style="color:#ddd;margin-left:10px;">${campaign.campaignName}</span>
                             </div>
-                            <div style="text-align: right;">
-                                <span style="color: #4CAF50; font-weight: bold; margin-right: 15px;">${totalConversions} Conversions</span>
-                                <span style="color: #2196F3;">${totalClicks} Clicks</span>
+                            <div>
+                                <span style="color:#4CAF50;font-weight:bold;margin-right:15px;">${totalConv} Conversions</span>
+                                <span style="color:#2196F3;">${totalClk} Clicks</span>
                             </div>
                         </div>
-                        <button class="viewCampaignDetails" data-campaign='${JSON.stringify(campaign).replace(/'/g, "&#39;")}' style="padding: 8px 16px; background: #2196F3; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 12px;">View Details</button>
-                    </div>
-                `;
+                        <button class="viewCampaignDetails" data-campaign='${JSON.stringify(campaign).replace(/'/g,"&#39;")}' style="padding:8px 16px;background:#2196F3;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:12px;">View Details</button>
+                    </div>`;
             });
         }
 
-        html += `
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button id="closeCampaignsModalFinal" style="flex: 1; padding: 14px 20px; background: #f44336; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Close</button>
+        resultsDiv.innerHTML = `
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:24px;">
+                <div style="background:linear-gradient(135deg,#1b5e20,#2e7d32);padding:16px;border-radius:8px;text-align:center;border:1px solid #4CAF50;">
+                    <div style="font-size:30px;font-weight:900;color:#fff;">${grandTotal}</div>
+                    <div style="color:#a5d6a7;font-size:11px;margin-top:4px;letter-spacing:1px;">TOTAL CONVERSIONS</div>
+                </div>
+                <div style="background:linear-gradient(135deg,#0d47a1,#1565c0);padding:16px;border-radius:8px;text-align:center;border:1px solid #2196F3;">
+                    <div style="font-size:30px;font-weight:900;color:#fff;">${grandClicks}</div>
+                    <div style="color:#90caf9;font-size:11px;margin-top:4px;letter-spacing:1px;">TOTAL CLICKS</div>
+                </div>
+                <div style="background:linear-gradient(135deg,#bf360c,#d84315);padding:16px;border-radius:8px;text-align:center;border:1px solid #ff9800;">
+                    <div style="font-size:30px;font-weight:900;color:#fff;">${withConversions.length}</div>
+                    <div style="color:#ffcc80;font-size:11px;margin-top:4px;letter-spacing:1px;">ACTIVE CAMPAIGNS</div>
+                </div>
+                <div style="background:linear-gradient(135deg,#4a148c,#6a1b9a);padding:16px;border-radius:8px;text-align:center;border:1px solid #9C27B0;">
+                    <div style="font-size:30px;font-weight:900;color:#fff;">${countryTotals.length}</div>
+                    <div style="color:#ce93d8;font-size:11px;margin-top:4px;letter-spacing:1px;">COUNTRIES</div>
+                </div>
             </div>
-        `;
 
-        resultsDiv.innerHTML = html;
+            <div style="background:#0a0a0a;border-radius:8px;padding:15px;border:1px solid #444;margin-bottom:24px;">
+                <h3 style="color:#ff9800;margin:0 0 14px 0;font-size:16px;">🌍 Total Conversions by Country</h3>
+                <div style="overflow-x:auto;">
+                    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                        <thead>
+                            <tr style="background:#2a2a2a;">
+                                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ff9800;color:#ff9800;">#</th>
+                                <th style="padding:10px 12px;text-align:left;border-bottom:2px solid #ff9800;color:#ff9800;">Country</th>
+                                <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #ff9800;color:#ff9800;">Conversions</th>
+                                <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #ff9800;color:#ff9800;">Share</th>
+                                <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #ff9800;color:#ff9800;">Clicks</th>
+                                <th style="padding:10px 12px;text-align:right;border-bottom:2px solid #ff9800;color:#ff9800;">Unique Clicks</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${countryRows}
+                            <tr style="background:#2a2a2a;font-weight:bold;">
+                                <td colspan="2" style="padding:11px 12px;border-top:2px solid #ff9800;color:#ffd700;font-size:14px;">TOTAL</td>
+                                <td style="padding:11px 12px;border-top:2px solid #ff9800;text-align:right;color:#4CAF50;font-size:15px;">${grandCountryConv}</td>
+                                <td style="padding:11px 12px;border-top:2px solid #ff9800;text-align:right;color:#ffd700;">100%</td>
+                                <td style="padding:11px 12px;border-top:2px solid #ff9800;text-align:right;color:#2196F3;">${grandCountryClk}</td>
+                                <td style="padding:11px 12px;border-top:2px solid #ff9800;text-align:right;color:#FF9800;">${grandCountryUQ}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <h3 style="color:#ff9800;margin:0 0 12px 0;">📋 Campaign Breakdown</h3>
+            <p style="color:#aaa;margin-bottom:15px;font-size:13px;">${withConversions.length} campaign(s) with conversions out of ${results.length} fetched.</p>
+            ${campaignCards}
+
+            <div style="display:flex;gap:10px;margin-top:20px;">
+                <button id="backToSelectionBtn"       style="padding:14px 20px;background:#9C27B0;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">← New Query</button>
+                <button id="closeCampaignsModalFinal" style="flex:1;padding:14px 20px;background:#f44336;color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;">Close</button>
+            </div>`;
 
         document.querySelectorAll('.viewCampaignDetails').forEach(btn => {
             btn.onclick = () => {
                 const campaign = JSON.parse(btn.dataset.campaign);
                 parentModal.remove();
-                displayResults(campaign.data, `${campaign.offerId} - ${campaign.campaignName} (${currentDateRange.from} to ${currentDateRange.to})`, true);
+                displayResults(campaign.data, `${campaign.offerId} - ${campaign.campaignName} (${currentDateRange.from} to ${currentDateRange.to})`);
             };
         });
 
-        document.getElementById('closeCampaignsModalFinal').onclick = () => {
-            parentModal.remove();
-            window.restartAutoRefresh();
-        };
+        document.getElementById('backToSelectionBtn').onclick       = () => { parentModal.remove(); showDatePickerModal(); };
+        document.getElementById('closeCampaignsModalFinal').onclick = () => parentModal.remove();
     }
 
+    // ── Cached results modal (back from detail view) ───────────
+    function showCampaignsModalWithResults() {
+        const modal = createModalBase(10001);
+        modal.id = 'campaignsModal';
+        const content = document.createElement('div');
+        content.style.cssText = `position:relative;z-index:3;background:linear-gradient(135deg,rgba(26,26,26,0.97) 0%,rgba(45,45,45,0.97) 100%);color:#fff;padding:40px;border-radius:12px;box-shadow:0 10px 50px rgba(0,0,0,0.7);border:2px solid #ff9800;min-width:500px;max-width:90%;max-height:90vh;overflow-y:auto;backdrop-filter:blur(4px);`;
+        content.innerHTML = `<h2 style="margin:0 0 20px 0;color:#ff9800;text-align:center;">🎯 Campaign Results</h2><div id="campaignSelectionArea" style="display:none;"></div><div id="campaignResults" style="display:block;"></div>`;
+        modal.appendChild(content); document.body.appendChild(modal);
+        displayCampaignResults(cachedCampaignResults, modal);
+        modal.onclick = (e) => { if(e.target===modal) modal.remove(); };
+    }
+
+    // ── Parse country table from HTML doc ─────────────────────
     function parseCountryData(doc) {
-        const data = [];
-        const seenCountries = new Set();
-        const tables = doc.querySelectorAll('table');
-
-        tables.forEach(table => {
+        const data = []; const seen = new Set();
+        doc.querySelectorAll('table').forEach(table => {
             const headerRow = table.querySelector('tr');
-            if (!headerRow) return;
-
-            const headers = Array.from(headerRow.querySelectorAll('th, td')).map(th =>
-                th.textContent.trim()
-            ).filter(h => h);
-
-            if (headers.includes('Country') || headers.includes('Clicks')) {
-                const rows = Array.from(table.querySelectorAll('tr')).slice(1);
-
-                rows.forEach(row => {
-                    const cells = Array.from(row.querySelectorAll('td, th'));
-
-                    if (cells.length >= 2) {
+            if(!headerRow) return;
+            const headers = Array.from(headerRow.querySelectorAll('th,td')).map(th=>th.textContent.trim()).filter(h=>h);
+            if(headers.includes('Country') || headers.includes('Clicks')) {
+                Array.from(table.querySelectorAll('tr')).slice(1).forEach(row => {
+                    const cells = Array.from(row.querySelectorAll('td,th'));
+                    if(cells.length>=2) {
                         const rowData = {};
-
-                        cells.forEach((cell, index) => {
-                            if (headers[index]) {
-                                rowData[headers[index]] = cell.textContent.trim();
-                            }
-                        });
-
-                        const hasData = Object.values(rowData).some(val => val && val !== '' && val !== '-');
-                        const countryKey = rowData['Country'];
-
-                        if (hasData && countryKey && !seenCountries.has(countryKey)) {
-                            if (countryKey.toLowerCase() !== 'total') {
-                                seenCountries.add(countryKey);
-                                data.push(rowData);
-                            }
+                        cells.forEach((cell,i) => { if(headers[i]) rowData[headers[i]] = cell.textContent.trim(); });
+                        const hasData = Object.values(rowData).some(v => v && v!=='' && v!=='-');
+                        const country = rowData['Country'];
+                        if(hasData && country && !seen.has(country) && country.toLowerCase()!=='total') {
+                            seen.add(country); data.push(rowData);
                         }
                     }
                 });
             }
         });
-
         return data;
     }
 
-    function displayResults(data, reportTitle, showBackButton = false) {
-        // Cancel auto-refresh when modal opens
-        window.cancelAutoRefresh();
-
-        const existingModal = document.getElementById('reportsDataModal');
-        if (existingModal) existingModal.remove();
-
+    // ── Per-campaign country detail modal ──────────────────────
+    function displayResults(data, reportTitle) {
+        document.getElementById('reportsDataModal')?.remove();
         const modal = createModalBase(10000);
         modal.id = 'reportsDataModal';
 
         const content = document.createElement('div');
-        content.style.cssText = `
-            position: relative;
-            z-index: 2;
-            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
-            color: #ffffff;
-            padding: 30px;
-            border-radius: 12px;
-            max-width: 95%;
-            max-height: 90vh;
-            overflow-y: auto;
-            box-shadow: 0 10px 50px rgba(0,0,0,0.5);
-            border: 2px solid #ffd700;
-        `;
+        content.style.cssText = `position:relative;z-index:3;background:linear-gradient(135deg,rgba(26,26,26,0.97) 0%,rgba(45,45,45,0.97) 100%);color:#fff;padding:30px;border-radius:12px;max-width:95%;max-height:90vh;overflow-y:auto;box-shadow:0 10px 50px rgba(0,0,0,0.7);border:2px solid #ff9800;backdrop-filter:blur(4px);`;
 
         const headers = Object.keys(data[0]);
+        let totalConv=0, totalClk=0, totalUQ=0;
+        data.forEach(r => { totalConv+=parseInt(r['Conversions'])||0; totalClk+=parseInt(r['Clicks'])||0; totalUQ+=parseInt(r['Unique Clicks'])||0; });
 
-        let totalConversions = 0;
-        let totalClicks = 0;
-        let totalUniqueClicks = 0;
-
-        data.forEach(row => {
-            totalConversions += parseInt(row['Conversions']) || 0;
-            totalClicks += parseInt(row['Clicks']) || 0;
-            totalUniqueClicks += parseInt(row['Unique Clicks']) || 0;
-        });
-
-        const backButtonHtml = showBackButton && cachedCampaignResults ?
-            `<button id="backToCampaignsBtn" style="background: #9C27B0; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">🔙 Back to Campaigns</button>` : '';
-
-        let html = `
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px;">
-                <div>
-                    <div style="display: flex; align-items: center; gap: 10px;">
-                        <span style="font-size: 32px;">🌍</span>
-                        <h2 style="margin: 0; color: #ffd700;">${reportTitle}</h2>
-                    </div>
-                    <p style="margin: 5px 0 0 0; color: #aaa; font-size: 13px;">
-                        ${data.length} countries |
-                        <span style="color: #4CAF50; font-weight: bold;">${totalConversions}</span> Conversions |
-                        <span style="color: #2196F3;">${totalClicks}</span> Clicks |
-                        <span style="color: #FF9800;">${totalUniqueClicks}</span> Unique
-                    </p>
-                </div>
-                <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                    ${backButtonHtml}
-                    <button id="viewCampaignsBtn" style="background: #ff9800; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">🎯 View Campaigns</button>
-                    <button id="refreshBtn" style="background: #2196F3; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">🔄 New Query</button>
-                    <button id="closeModal" style="background: #f44336; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px;">✕ Close</button>
-                </div>
-            </div>
-            <div style="overflow-x: auto; background: #0a0a0a; border-radius: 8px; padding: 10px;">
-                <table style="width: 100%; border-collapse: collapse; margin: 10px 0; font-size: 13px;">
-                    <thead>
-                        <tr style="background-color: #2a2a2a; position: sticky; top: 0;">
-        `;
-
-        headers.forEach(header => {
-            html += `<th style="padding: 14px 12px; text-align: left; border-bottom: 2px solid #ffd700; white-space: nowrap; color: #ffd700; font-weight: bold;">${header}</th>`;
-        });
-
-        html += `</tr></thead><tbody>`;
-
-        data.forEach((row, idx) => {
-            const bgColor = idx % 2 === 0 ? '#1a1a1a' : '#252525';
-            html += `<tr style="background-color: ${bgColor}; transition: background 0.2s;" onmouseover="this.style.backgroundColor='#333'" onmouseout="this.style.backgroundColor='${bgColor}'">`;
-
-            headers.forEach(header => {
-                const value = row[header] || '-';
-                const isHighConversion = header === 'Conversions' && parseInt(value) >= 5;
-                const style = isHighConversion ? 'color: #4CAF50; font-weight: bold;' : '';
-                html += `<td style="padding: 12px; border-bottom: 1px solid #333; white-space: nowrap; ${style}">${value}</td>`;
+        let rows = '';
+        data.forEach((row,idx) => {
+            const bg = idx%2===0?'#1a1a1a':'#252525';
+            rows += `<tr style="background:${bg};transition:background 0.2s;" onmouseover="this.style.backgroundColor='#333'" onmouseout="this.style.backgroundColor='${bg}'">`;
+            headers.forEach(h => {
+                const val = row[h]||'-';
+                const hi  = h==='Conversions' && parseInt(val)>=5 ? 'color:#4CAF50;font-weight:bold;' : '';
+                rows += `<td style="padding:12px;border-bottom:1px solid #333;white-space:nowrap;${hi}">${val}</td>`;
             });
-
-            html += `</tr>`;
+            rows += `</tr>`;
         });
 
-        html += `
-                    </tbody>
-                </table>
-            </div>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-top: 20px;">
-                <button id="downloadCSV" style="padding: 14px; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">⬇️ CSV</button>
-                <button id="downloadJSON" style="padding: 14px; background: linear-gradient(135deg, #2196F3, #1976D2); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">⬇️ JSON</button>
-                <button id="downloadExcel" style="padding: 14px; background: linear-gradient(135deg, #10793f, #0d5c2f); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">📊 Excel</button>
-                <button id="copyData" style="padding: 14px; background: linear-gradient(135deg, #FF9800, #F57C00); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; transition: transform 0.2s;" onmouseover="this.style.transform='scale(1.05)'" onmouseout="this.style.transform='scale(1)'">📋 Copy</button>
-            </div>
-        `;
-
-        content.innerHTML = html;
-        modal.appendChild(content);
-        document.body.appendChild(modal);
-
-        document.getElementById('downloadCSV').onclick = () => downloadCSV(data, reportTitle);
-        document.getElementById('downloadJSON').onclick = () => downloadJSON(data, reportTitle);
-        document.getElementById('downloadExcel').onclick = () => downloadExcel(data, reportTitle);
-        document.getElementById('copyData').onclick = () => copyToClipboard(data);
-        document.getElementById('closeModal').onclick = () => {
-            modal.remove();
-            window.restartAutoRefresh();
-        };
-        document.getElementById('refreshBtn').onclick = () => {
-            modal.remove();
-            showDatePickerModal();
-        };
-        document.getElementById('viewCampaignsBtn').onclick = () => {
-            showCampaignsModal();
-        };
-
-        if (showBackButton && cachedCampaignResults) {
-            document.getElementById('backToCampaignsBtn').onclick = () => {
-                modal.remove();
-                showCampaignsModalWithResults();
-            };
-        }
-
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                modal.remove();
-                window.restartAutoRefresh();
-            }
-        };
-
-        document.addEventListener('keydown', function escHandler(e) {
-            if (e.key === 'Escape') {
-                modal.remove();
-                window.restartAutoRefresh();
-                document.removeEventListener('keydown', escHandler);
-            }
-        });
-    }
-
-    function showCampaignsModalWithResults() {
-        // Cancel auto-refresh when modal opens
-        window.cancelAutoRefresh();
-
-        const modal = createModalBase(10001);
-        modal.id = 'campaignsModal';
-
-        const content = document.createElement('div');
-        content.style.cssText = `
-            position: relative;
-            z-index: 2;
-            background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
-            color: #ffffff;
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 10px 50px rgba(0,0,0,0.5);
-            border: 2px solid #ff9800;
-            min-width: 500px;
-            max-width: 90%;
-            max-height: 90vh;
-            overflow-y: auto;
-        `;
+        let ths = '';
+        headers.forEach(h => { ths += `<th style="padding:14px 12px;text-align:left;border-bottom:2px solid #ff9800;white-space:nowrap;color:#ff9800;font-weight:bold;">${h}</th>`; });
 
         content.innerHTML = `
-            <h2 style="margin: 0 0 20px 0; color: #ff9800; text-align: center;">🎯 Campaign Results</h2>
-            <div id="campaignSelectionArea" style="display: none;"></div>
-            <div id="campaignResults" style="display: block;"></div>
-        `;
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:10px;">
+                <div>
+                    <div style="display:flex;align-items:center;gap:10px;">
+                        <span style="font-size:32px;">🎯</span>
+                        <h2 style="margin:0;color:#ff9800;">${reportTitle}</h2>
+                    </div>
+                    <p style="margin:5px 0 0 0;color:#aaa;font-size:13px;">
+                        ${data.length} countries |
+                        <span style="color:#4CAF50;font-weight:bold;">${totalConv}</span> Conversions |
+                        <span style="color:#2196F3;">${totalClk}</span> Clicks |
+                        <span style="color:#FF9800;">${totalUQ}</span> Unique
+                    </p>
+                </div>
+                <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                    <button id="backToCampaignsBtn" style="background:#9C27B0;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;">🔙 Back</button>
+                    <button id="closeModal" style="background:#f44336;color:white;border:none;padding:10px 20px;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;">✕ Close</button>
+                </div>
+            </div>
+            <div style="overflow-x:auto;background:#0a0a0a;border-radius:8px;padding:10px;">
+                <table style="width:100%;border-collapse:collapse;margin:10px 0;font-size:13px;">
+                    <thead><tr style="background:#2a2a2a;position:sticky;top:0;">${ths}</tr></thead>
+                    <tbody>${rows}</tbody>
+                </table>
+            </div>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-top:20px;">
+                <button id="downloadCSV"   style="padding:14px;background:linear-gradient(135deg,#4CAF50,#45a049);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;">⬇️ CSV</button>
+                <button id="downloadJSON"  style="padding:14px;background:linear-gradient(135deg,#2196F3,#1976D2);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;">⬇️ JSON</button>
+                <button id="downloadExcel" style="padding:14px;background:linear-gradient(135deg,#10793f,#0d5c2f);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;">📊 Excel</button>
+                <button id="copyData"      style="padding:14px;background:linear-gradient(135deg,#FF9800,#F57C00);color:white;border:none;border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;">📋 Copy</button>
+            </div>`;
 
-        modal.appendChild(content);
-        document.body.appendChild(modal);
+        modal.appendChild(content); document.body.appendChild(modal);
 
-        displayCampaignResults(cachedCampaignResults, modal);
-
-        modal.onclick = (e) => {
-            if (e.target === modal) {
-                modal.remove();
-                window.restartAutoRefresh();
-            }
-        };
+        document.getElementById('downloadCSV').onclick   = () => downloadCSV(data, reportTitle);
+        document.getElementById('downloadJSON').onclick  = () => downloadJSON(data);
+        document.getElementById('downloadExcel').onclick = () => downloadExcel(data, reportTitle);
+        document.getElementById('copyData').onclick      = () => copyToClipboard(data);
+        document.getElementById('closeModal').onclick    = () => modal.remove();
+        document.getElementById('backToCampaignsBtn').onclick = () => { modal.remove(); if(cachedCampaignResults) showCampaignsModalWithResults(); };
+        modal.onclick = (e) => { if(e.target===modal) modal.remove(); };
+        document.addEventListener('keydown', function esc(e) { if(e.key==='Escape') { modal.remove(); document.removeEventListener('keydown',esc); } });
     }
 
+    // ── Download helpers ───────────────────────────────────────
     function downloadCSV(data, reportTitle) {
         const headers = Object.keys(data[0]);
         let csv = headers.join(',') + '\n';
-        data.forEach(row => {
-            csv += headers.map(header => {
-                const value = (row[header] || '').toString();
-                return value.includes(',') ? `"${value.replace(/"/g, '""')}"` : value;
-            }).join(',') + '\n';
-        });
-        const timestamp = new Date().toISOString().slice(0,10);
-        downloadFile(csv, `country_conversions_${timestamp}.csv`, 'text/csv');
+        data.forEach(row => { csv += headers.map(h => { const v=(row[h]||'').toString(); return v.includes(',')?`"${v.replace(/"/g,'""')}"`:`${v}`; }).join(',') + '\n'; });
+        downloadFile(csv, `campaign_conversions_${new Date().toISOString().slice(0,10)}.csv`, 'text/csv');
         showNotification('✅ CSV downloaded!');
     }
-
-    function downloadJSON(data, reportTitle) {
-        const json = JSON.stringify(data, null, 2);
-        const timestamp = new Date().toISOString().slice(0,10);
-        downloadFile(json, `country_conversions_${timestamp}.json`, 'application/json');
+    function downloadJSON(data) {
+        downloadFile(JSON.stringify(data,null,2), `campaign_conversions_${new Date().toISOString().slice(0,10)}.json`, 'application/json');
         showNotification('✅ JSON downloaded!');
     }
-
     function downloadExcel(data, reportTitle) {
         const headers = Object.keys(data[0]);
-        let excel = `<html><head><meta charset="UTF-8"><style>table{border-collapse:collapse;font-family:Arial;}th{background:#4CAF50;color:white;font-weight:bold;padding:8px;border:1px solid #ddd;}td{padding:8px;border:1px solid #ddd;}tr:nth-child(even){background:#f2f2f2;}</style></head><body><h2>${reportTitle}</h2><table border="1"><thead><tr>`;
-        headers.forEach(h => excel += `<th>${h}</th>`);
-        excel += `</tr></thead><tbody>`;
-        data.forEach(row => {
-            excel += '<tr>';
-            headers.forEach(h => excel += `<td>${row[h] || ''}</td>`);
-            excel += '</tr>';
-        });
-        excel += `</tbody></table></body></html>`;
-        const timestamp = new Date().toISOString().slice(0,10);
-        downloadFile(excel, `country_conversions_${timestamp}.xls`, 'application/vnd.ms-excel');
+        let xls = `<html><head><meta charset="UTF-8"><style>table{border-collapse:collapse;font-family:Arial;}th{background:#ff9800;color:white;font-weight:bold;padding:8px;border:1px solid #ddd;}td{padding:8px;border:1px solid #ddd;}tr:nth-child(even){background:#f2f2f2;}</style></head><body><h2>${reportTitle}</h2><table><thead><tr>`;
+        headers.forEach(h => xls += `<th>${h}</th>`);
+        xls += `</tr></thead><tbody>`;
+        data.forEach(row => { xls += '<tr>'; headers.forEach(h => xls += `<td>${row[h]||''}</td>`); xls += '</tr>'; });
+        xls += `</tbody></table></body></html>`;
+        downloadFile(xls, `campaign_conversions_${new Date().toISOString().slice(0,10)}.xls`, 'application/vnd.ms-excel');
         showNotification('✅ Excel downloaded!');
     }
-
     function copyToClipboard(data) {
         const headers = Object.keys(data[0]);
         let text = headers.join('\t') + '\n';
-        data.forEach(row => {
-            text += headers.map(h => row[h] || '').join('\t') + '\n';
-        });
-        navigator.clipboard.writeText(text).then(() => {
-            showNotification('✅ Copied to clipboard!');
-        });
+        data.forEach(row => { text += headers.map(h => row[h]||'').join('\t') + '\n'; });
+        navigator.clipboard.writeText(text).then(() => showNotification('✅ Copied to clipboard!'));
     }
-
     function downloadFile(content, filename, type) {
-        const blob = new Blob([content], { type });
-        const url = URL.createObjectURL(blob);
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = filename;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        const blob = new Blob([content],{type});
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href=url; a.download=filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+    }
+    function showNotification(msg) {
+        const n = document.createElement('div');
+        n.textContent = msg;
+        n.style.cssText = `position:fixed;top:80px;right:20px;background:linear-gradient(135deg,#ff9800,#f57c00);color:white;padding:16px 28px;border-radius:8px;z-index:10001;box-shadow:0 6px 20px rgba(255,152,0,0.4);animation:slideIn 0.3s ease;font-weight:bold;border:2px solid rgba(255,255,255,0.3);`;
+        document.body.appendChild(n);
+        setTimeout(() => { n.style.animation='slideOut 0.3s ease'; setTimeout(()=>n.remove(),300); }, 3000);
     }
 
-    function showNotification(message) {
-        const notification = document.createElement('div');
-        notification.textContent = message;
-        notification.style.cssText = `position:fixed;top:80px;right:20px;background:linear-gradient(135deg,#4CAF50,#45a049);color:white;padding:16px 28px;border-radius:8px;z-index:10001;box-shadow:0 6px 20px rgba(76,175,80,0.4);animation:slideIn 0.3s ease;font-weight:bold;border:2px solid rgba(255,255,255,0.3);`;
-        document.body.appendChild(notification);
-        setTimeout(() => {
-            notification.style.animation = 'slideOut 0.3s ease';
-            setTimeout(() => notification.remove(), 300);
-        }, 3000);
-    }
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideIn  { from { transform:translateX(400px); opacity:0; } to { transform:translateX(0);    opacity:1; } }
+        @keyframes slideOut { from { transform:translateX(0);    opacity:1; } to { transform:translateX(400px); opacity:0; } }
+        @keyframes fadeIn   { from { opacity:0; } to { opacity:1; } }
+        @keyframes spin     { to   { transform:rotate(360deg); } }
+    `;
+    document.head.appendChild(style);
 
+    if(document.readyState==='loading') { document.addEventListener('DOMContentLoaded', createViewButton); } else { createViewButton(); }
 })();
