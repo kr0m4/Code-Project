@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bai Bayot Shortener
 // @namespace    http://tampermonkey.net/
-// @version      1.0
+// @version      1.1
 // @description  Automatically shorten URLs on bybio.co with custom aliases and copy all results
 // @author       Kr0m4
 // @match        https://bybio.co/*
@@ -17,43 +17,35 @@
 
     let baseUrl = 'https://bybio.co/';
 
-    // Utility function to wait
     const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-    // Find element by text content
     function findButtonByText(text) {
         const buttons = Array.from(document.querySelectorAll('button'));
         return buttons.find(btn => btn.textContent.trim().includes(text));
     }
 
-    // Find the "Create link" button
     function findCreateLinkButton() {
         return findButtonByText('Create link');
     }
 
-    // Find the "Shorten URL" option in dropdown
     function findShortenUrlOption() {
         const options = Array.from(document.querySelectorAll('[role="menuitem"], .dropdown-item, button'));
         return options.find(opt => opt.textContent.trim().includes('Shortened URL'));
     }
 
-    // Find the "Shorten URL" submit button
     function findShortenSubmitButton() {
         return findButtonByText('Shorten URL');
     }
 
-    // Save state to localStorage
     function saveState(state) {
         GM_setValue('autoShortenerState', JSON.stringify(state));
     }
 
-    // Load state from localStorage
     function loadState() {
         const stateStr = GM_getValue('autoShortenerState', null);
         return stateStr ? JSON.parse(stateStr) : null;
     }
 
-    // Clear state
     function clearState() {
         GM_deleteValue('autoShortenerState');
     }
@@ -67,7 +59,7 @@
             return;
         }
 
-        const { currentIndex, customAliases, redirectUrl, shortenedLinks, failedLinks } = state;
+        const { currentIndex, customAliases, redirectUrl } = state;
 
         if (currentIndex >= customAliases.length) {
             console.log('✅ All links have been shortened!');
@@ -80,55 +72,55 @@
         console.log(`\n🔄 Processing link ${currentIndex + 1}/${customAliases.length}`);
         console.log(`Alias: ${currentAlias || '(random)'}`);
 
+        // ✅ FIX: If not on /dashboard, navigate there first before doing anything
+        if (window.location.pathname !== '/dashboard') {
+            console.log('Not on dashboard, redirecting...');
+            window.location.href = 'https://bybio.co/dashboard';
+            return;
+        }
+
         try {
             // Step 1: Click "Create link" button
             console.log('Step 1: Looking for Create link button...');
-            await wait(300);
+            await wait(500);
 
             const createButton = findCreateLinkButton();
-            if (!createButton) {
-                throw new Error('Create link button not found');
-            }
-
+            if (!createButton) throw new Error('Create link button not found');
             createButton.click();
             console.log('✓ Clicked Create link');
 
-            // Step 2: Wait for dropdown and click "Shortened URL"
-            await wait(300);
+            // Step 2: Click "Shortened URL" in dropdown
+            await wait(500);
             console.log('Step 2: Looking for Shortened URL option...');
 
             const shortenOption = findShortenUrlOption();
-            if (!shortenOption) {
-                throw new Error('Shortened URL option not found');
-            }
-
+            if (!shortenOption) throw new Error('Shortened URL option not found');
             shortenOption.click();
             console.log('✓ Selected Shortened URL');
 
-            // Step 3: Fill in the long URL
-            await wait(300);
+            // Step 3: Fill long URL
+            await wait(500);
             console.log('Step 3: Filling long URL...');
 
             const longUrlInput = document.querySelector('input[placeholder*="https://domain.com"]') ||
-                                document.querySelector('input[type="text"]');
-
-            if (!longUrlInput) {
-                throw new Error('Long URL input not found');
-            }
+                                 document.querySelector('input[type="text"]');
+            if (!longUrlInput) throw new Error('Long URL input not found');
 
             longUrlInput.value = redirectUrl;
             longUrlInput.dispatchEvent(new Event('input', { bubbles: true }));
             longUrlInput.dispatchEvent(new Event('change', { bubbles: true }));
             console.log('✓ Filled long URL');
 
-            // Step 4: Fill in custom alias if provided
+            // Step 4: Fill custom alias
             await wait(300);
             console.log('Step 4: Filling custom alias...');
 
             const aliasInputs = document.querySelectorAll('input[type="text"]');
             const aliasInput = Array.from(aliasInputs).find(input =>
-                input.placeholder.includes('custom-alias') ||
-                input.placeholder.includes('your-custom-alias')
+                input.placeholder && (
+                    input.placeholder.includes('custom-alias') ||
+                    input.placeholder.includes('your-custom-alias')
+                )
             );
 
             if (aliasInput && currentAlias) {
@@ -141,25 +133,21 @@
                 console.log('✓ Left alias empty for random generation');
             }
 
-            // Step 5: Click "Shorten URL" submit button
+            // Step 5: Submit
             await wait(300);
             console.log('Step 5: Clicking Shorten URL button...');
 
             const submitButton = findShortenSubmitButton();
-            if (!submitButton) {
-                throw new Error('Shorten URL submit button not found');
-            }
-
+            if (!submitButton) throw new Error('Shorten URL submit button not found');
             submitButton.click();
             console.log('✓ Clicked Shorten URL');
 
-            // Step 6: Wait and check for errors
-            await wait(800);
+            // Step 6: Wait for response — use longer delay to allow redirect to happen
+            await wait(2000);
 
             // Check for error message
             const errorMessages = document.querySelectorAll('[style*="background"], .error, [class*="error"]');
             let hasError = false;
-
             for (const element of errorMessages) {
                 const text = element.textContent.toLowerCase();
                 if (text.includes('invalid') || text.includes('error') || text.includes('missing')) {
@@ -170,12 +158,11 @@
             }
 
             if (hasError) {
-                const failedEntry = {
+                state.failedLinks.push({
                     alias: currentAlias || '(empty)',
                     url: redirectUrl,
                     reason: 'Invalid format or error in submission'
-                };
-                state.failedLinks.push(failedEntry);
+                });
                 console.log('❌ Link failed:', currentAlias);
             } else {
                 const shortLink = `${baseUrl}${currentAlias}`;
@@ -183,16 +170,13 @@
                 console.log('✅ Link created:', shortLink);
             }
 
-            // Update state for next iteration
             state.currentIndex++;
             console.log(`✅ Link ${state.currentIndex}/${customAliases.length} completed`);
-
-            // Save updated state
             saveState(state);
 
-            // Step 7: Navigate back to dashboard for next link
+            // ✅ FIX: Always navigate back to /dashboard for next link, regardless of current page
             if (state.currentIndex < customAliases.length) {
-                console.log('Step 7: Navigating to dashboard for next link...');
+                console.log('Navigating to dashboard for next link...');
                 await wait(300);
                 window.location.href = 'https://bybio.co/dashboard';
             } else {
@@ -204,14 +188,19 @@
             console.error('❌ Error:', error.message);
             showError(error.message);
 
-            // Save state even on error
+            state.failedLinks.push({
+                alias: currentAlias || '(empty)',
+                url: redirectUrl,
+                reason: error.message
+            });
             state.currentIndex++;
             saveState(state);
 
-            // Try to continue
             if (state.currentIndex < customAliases.length) {
                 await wait(1000);
                 window.location.href = 'https://bybio.co/dashboard';
+            } else {
+                finishProcess(state);
             }
         }
     }
@@ -225,7 +214,6 @@
         console.log(`Successful: ${state.shortenedLinks.length}`);
         console.log(`Failed: ${state.failedLinks.length}`);
 
-        // Redirect to dashboard to show results
         if (window.location.pathname !== '/dashboard') {
             window.location.href = 'https://bybio.co/dashboard';
         }
@@ -236,9 +224,7 @@
         if (errorDiv) {
             errorDiv.textContent = `❌ ${message}`;
             errorDiv.style.display = 'block';
-            setTimeout(() => {
-                errorDiv.style.display = 'none';
-            }, 5000);
+            setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
         }
     }
 
@@ -253,13 +239,8 @@
     function updateProgress(current, total) {
         const progressEl = document.getElementById('progress-text');
         const progressBar = document.getElementById('progress-bar');
-        if (progressEl) {
-            progressEl.textContent = `${current}/${total}`;
-        }
-        if (progressBar) {
-            const percentage = (current / total) * 100;
-            progressBar.style.width = `${percentage}%`;
-        }
+        if (progressEl) progressEl.textContent = `${current}/${total}`;
+        if (progressBar) progressBar.style.width = `${(current / total) * 100}%`;
     }
 
     function updateResultsList(links) {
@@ -276,7 +257,6 @@
     function updateFailedList(failedLinks) {
         const failedSection = document.getElementById('failed-section');
         const failedList = document.getElementById('failed-list');
-
         if (failedLinks.length > 0 && failedSection && failedList) {
             failedSection.style.display = 'block';
             failedList.innerHTML = failedLinks.map((failed, index) =>
@@ -289,48 +269,26 @@
     }
 
     function startProcess() {
-        // Get values from inputs
         const redirectUrl = document.getElementById('redirect-url').value.trim();
         const aliasesText = document.getElementById('custom-aliases').value.trim();
 
-        // Validate inputs
-        if (!redirectUrl) {
-            showError('Please enter a redirect URL');
-            return;
-        }
+        if (!redirectUrl) { showError('Please enter a redirect URL'); return; }
+        if (!aliasesText) { showError('Please enter at least one custom alias'); return; }
 
-        if (!aliasesText) {
-            showError('Please enter at least one custom alias');
-            return;
-        }
-
-        // Parse aliases (one per line)
         const customAliases = aliasesText.split('\n').map(alias => alias.trim()).filter(alias => alias);
+        if (customAliases.length === 0) { showError('Please enter at least one custom alias'); return; }
 
-        if (customAliases.length === 0) {
-            showError('Please enter at least one custom alias');
-            return;
-        }
-
-        // Check for invalid characters (underscores)
         const invalidAliases = [];
         customAliases.forEach((alias, index) => {
-            if (alias && alias.includes('_')) {
-                invalidAliases.push({ alias, line: index + 1 });
-            }
+            if (alias && alias.includes('_')) invalidAliases.push({ alias, line: index + 1 });
         });
 
         if (invalidAliases.length > 0) {
-            // Highlight invalid aliases in textarea
             const textarea = document.getElementById('custom-aliases');
             textarea.style.borderColor = '#dc2626';
             textarea.style.background = '#fef2f2';
-
-            // Show detailed error
             const errorLines = invalidAliases.map(item => `Line ${item.line}: "${item.alias}"`).join('\n');
             showError(`Invalid aliases found! Underscores (_) are not allowed.\n\n${errorLines}\n\nPlease use hyphens (-) instead.`);
-
-            // Create validation message below textarea
             const validationMsg = document.getElementById('validation-message');
             if (validationMsg) {
                 validationMsg.innerHTML = invalidAliases.map(item =>
@@ -341,58 +299,49 @@
                 ).join('');
                 validationMsg.style.display = 'block';
             }
-
             return;
         }
 
-        // Clear any previous validation errors
         const textarea = document.getElementById('custom-aliases');
         textarea.style.borderColor = '#e5e7eb';
         textarea.style.background = 'white';
         const validationMsg = document.getElementById('validation-message');
-        if (validationMsg) {
-            validationMsg.style.display = 'none';
-        }
+        if (validationMsg) validationMsg.style.display = 'none';
 
-        // Initialize state
         const state = {
             isProcessing: true,
             isComplete: false,
             currentIndex: 0,
-            customAliases: customAliases,
-            redirectUrl: redirectUrl,
+            customAliases,
+            redirectUrl,
             shortenedLinks: [],
             failedLinks: []
         };
 
-        // Save state
         saveState(state);
 
-        // Update UI
         document.getElementById('input-section').style.display = 'none';
         document.getElementById('progress-section').style.display = 'block';
-
         updateProgress(0, customAliases.length);
 
-        // Start automation
         console.log('🚀 Starting automation...');
         console.log(`📋 ${customAliases.length} aliases to process`);
-        console.log('⚡ Speed Mode: 5x faster!');
 
-        setTimeout(automateShortening, 500);
+        // ✅ FIX: Navigate to dashboard first if not already there
+        if (window.location.pathname === '/dashboard') {
+            setTimeout(automateShortening, 500);
+        } else {
+            window.location.href = 'https://bybio.co/dashboard';
+        }
     }
 
     function resetProcess() {
         clearState();
-
         const textarea = document.getElementById('custom-aliases');
         textarea.style.borderColor = '#e5e7eb';
         textarea.style.background = 'white';
-
         const validationMsg = document.getElementById('validation-message');
-        if (validationMsg) {
-            validationMsg.style.display = 'none';
-        }
+        if (validationMsg) validationMsg.style.display = 'none';
 
         document.getElementById('input-section').style.display = 'block';
         document.getElementById('progress-section').style.display = 'none';
@@ -411,48 +360,33 @@
 
     function copyResults() {
         const state = loadState();
-        if (!state || state.shortenedLinks.length === 0) {
-            return;
-        }
+        if (!state || state.shortenedLinks.length === 0) return;
 
         const resultsText = state.shortenedLinks.join('\n');
-
         if (typeof GM_setClipboard !== 'undefined') {
             GM_setClipboard(resultsText);
         } else {
-            const textarea = document.createElement('textarea');
-            textarea.value = resultsText;
-            document.body.appendChild(textarea);
-            textarea.select();
+            const ta = document.createElement('textarea');
+            ta.value = resultsText;
+            document.body.appendChild(ta);
+            ta.select();
             document.execCommand('copy');
-            document.body.removeChild(textarea);
+            document.body.removeChild(ta);
         }
 
         const btn = document.getElementById('copy-results-btn');
         btn.textContent = '✓ Copied!';
-        setTimeout(() => {
-            btn.textContent = '📋 Copy All Shortened Links';
-        }, 2000);
+        setTimeout(() => { btn.textContent = '📋 Copy All Shortened Links'; }, 2000);
     }
 
-    // Create control panel UI
     function createControlPanel() {
         const panel = document.createElement('div');
         panel.id = 'auto-shortener-panel';
         panel.style.cssText = `
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            background: white;
-            color: #1f2937;
-            padding: 0;
-            border-radius: 16px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.15);
-            z-index: 10000;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
-            width: 380px;
-            max-height: 90vh;
-            overflow-y: auto;
+            position: fixed; top: 20px; right: 20px; background: white; color: #1f2937;
+            padding: 0; border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.15);
+            z-index: 10000; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            width: 380px; max-height: 90vh; overflow-y: auto;
         `;
 
         panel.innerHTML = `
@@ -463,45 +397,24 @@
 
             <div id="input-section" style="padding: 20px;">
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #374151;">
-                        Redirect URL
-                    </label>
+                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #374151;">Redirect URL</label>
                     <input type="text" id="redirect-url" placeholder="https://example.com/your-long-url"
                         style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 13px; box-sizing: border-box; outline: none; transition: border 0.3s;"
                         onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#e5e7eb'">
                 </div>
-
                 <div style="margin-bottom: 16px;">
-                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #374151;">
-                        Custom Aliases (one per line)
-                    </label>
-                    <textarea id="custom-aliases" placeholder="my-first-link
-my-second-link
-custom-alias-3
-
-Leave empty line for random alias"
+                    <label style="display: block; margin-bottom: 6px; font-size: 13px; font-weight: 600; color: #374151;">Custom Aliases (one per line)</label>
+                    <textarea id="custom-aliases" placeholder="my-first-link&#10;my-second-link&#10;custom-alias-3"
                         style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 13px; height: 120px; resize: vertical; font-family: monospace; box-sizing: border-box; outline: none; transition: border 0.3s;"
                         onfocus="this.style.borderColor='#667eea'" onblur="this.style.borderColor='#e5e7eb'"></textarea>
                     <div style="font-size: 11px; color: #6b7280; margin-top: 4px;">💡 Tip: Use hyphens (-) not underscores (_). Leave a line empty for random alias.</div>
                     <div id="validation-message" style="display: none; margin-top: 8px;"></div>
                 </div>
-
-                <button id="start-btn" style="
-                    width: 100%;
-                    padding: 14px;
-                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-                    color: white;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    font-size: 15px;
-                    transition: transform 0.2s, box-shadow 0.2s;
-                " onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(102, 126, 234, 0.4)';"
-                   onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
+                <button id="start-btn" style="width: 100%; padding: 14px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 15px;"
+                    onmouseover="this.style.transform='translateY(-2px)'; this.style.boxShadow='0 6px 20px rgba(102,126,234,0.4)';"
+                    onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
                     ▶ Start Auto Shortening
                 </button>
-
                 <div id="error-message" style="display: none; margin-top: 12px; padding: 10px; background: #fee2e2; color: #dc2626; border-radius: 6px; font-size: 12px;"></div>
             </div>
 
@@ -515,49 +428,22 @@ Leave empty line for random alias"
                         <div id="progress-bar" style="height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); width: 0%; transition: width 0.3s;"></div>
                     </div>
                 </div>
-
                 <div style="margin-bottom: 16px;">
                     <div style="font-size: 13px; font-weight: 600; color: #374151; margin-bottom: 8px;">Shortened Links</div>
                     <div id="results-list" style="max-height: 200px; overflow-y: auto;"></div>
                 </div>
-
                 <div id="failed-section" style="display: none; margin-bottom: 16px;">
                     <div style="font-size: 13px; font-weight: 600; color: #dc2626; margin-bottom: 8px;">Failed Links</div>
                     <div id="failed-list" style="max-height: 150px; overflow-y: auto;"></div>
                 </div>
-
                 <div id="success-message" style="display: none; padding: 12px; background: #d1fae5; color: #065f46; border-radius: 8px; font-size: 13px; margin-bottom: 12px; font-weight: 600;"></div>
-
-                <button id="copy-results-btn" style="
-                    display: none;
-                    width: 100%;
-                    padding: 14px;
-                    background: #10b981;
-                    color: white;
-                    border: none;
-                    border-radius: 8px;
-                    font-weight: bold;
-                    cursor: pointer;
-                    font-size: 15px;
-                    margin-bottom: 8px;
-                    transition: background 0.3s;
-                " onmouseover="this.style.background='#059669';" onmouseout="this.style.background='#10b981';">
+                <button id="copy-results-btn" style="display: none; width: 100%; padding: 14px; background: #10b981; color: white; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; font-size: 15px; margin-bottom: 8px;"
+                    onmouseover="this.style.background='#059669';" onmouseout="this.style.background='#10b981';">
                     📋 Copy All Shortened Links
                 </button>
-
-                <button id="reset-btn" style="
-                    width: 100%;
-                    padding: 10px;
-                    background: transparent;
-                    color: #6b7280;
-                    border: 2px solid #e5e7eb;
-                    border-radius: 8px;
-                    cursor: pointer;
-                    font-size: 13px;
-                    font-weight: 600;
-                    transition: all 0.3s;
-                " onmouseover="this.style.borderColor='#667eea'; this.style.color='#667eea';"
-                   onmouseout="this.style.borderColor='#e5e7eb'; this.style.color='#6b7280';">
+                <button id="reset-btn" style="width: 100%; padding: 10px; background: transparent; color: #6b7280; border: 2px solid #e5e7eb; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 600;"
+                    onmouseover="this.style.borderColor='#667eea'; this.style.color='#667eea';"
+                    onmouseout="this.style.borderColor='#e5e7eb'; this.style.color='#6b7280';">
                     🔄 Create New Batch
                 </button>
             </div>
@@ -565,65 +451,58 @@ Leave empty line for random alias"
 
         document.body.appendChild(panel);
 
-        // Add event listeners
         document.getElementById('start-btn').addEventListener('click', startProcess);
         document.getElementById('reset-btn').addEventListener('click', resetProcess);
         document.getElementById('copy-results-btn').addEventListener('click', copyResults);
 
-        // Check if we have an active state
         checkAndRestoreState();
     }
 
-    // Check if we need to restore state and continue
     function checkAndRestoreState() {
         const state = loadState();
+        if (!state) return;
 
-        if (!state) {
-            return;
-        }
-
-        // Update UI with current state
         if (state.isProcessing || state.isComplete) {
             document.getElementById('input-section').style.display = 'none';
             document.getElementById('progress-section').style.display = 'block';
-
             updateProgress(state.currentIndex, state.customAliases.length);
             updateResultsList(state.shortenedLinks);
-
-            if (state.failedLinks.length > 0) {
-                updateFailedList(state.failedLinks);
-            }
+            if (state.failedLinks.length > 0) updateFailedList(state.failedLinks);
         }
 
         if (state.isComplete) {
-            // Show completion
-            const totalProcessed = state.shortenedLinks.length + state.failedLinks.length;
             let message = `✅ Process completed! ${state.shortenedLinks.length} successful`;
-
-            if (state.failedLinks.length > 0) {
-                message += `, ${state.failedLinks.length} failed`;
-            }
-
+            if (state.failedLinks.length > 0) message += `, ${state.failedLinks.length} failed`;
             showSuccess(message);
             document.getElementById('copy-results-btn').style.display = 'block';
-            document.getElementById('start-btn').textContent = '✅ Completed';
-            document.getElementById('start-btn').style.background = '#10b981';
-        } else if (state.isProcessing && window.location.pathname === '/dashboard') {
-            // Continue automation
-            console.log('Resuming automation from saved state...');
+
+        } else if (state.isProcessing) {
             document.getElementById('start-btn').textContent = '⏳ Processing...';
             document.getElementById('start-btn').disabled = true;
-            setTimeout(automateShortening, 1000);
+
+            const path = window.location.pathname;
+
+            if (path === '/dashboard') {
+                // We're on the dashboard — start the next link
+                console.log('✅ On dashboard, resuming automation...');
+                setTimeout(automateShortening, 1000);
+            } else {
+                // ✅ FIX: We landed on /link/XXXXXX or another page after creation
+                // Always redirect back to /dashboard to continue the batch
+                console.log(`⚠️ On ${path} instead of /dashboard — redirecting to continue batch...`);
+                setTimeout(() => {
+                    window.location.href = 'https://bybio.co/dashboard';
+                }, 800);
+            }
         }
     }
 
-    // Initialize when page loads
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', createControlPanel);
     } else {
         createControlPanel();
     }
 
-    console.log('🚀 Bybio.co Auto Shortener with UI loaded!');
+    console.log('🚀 Bybio.co Auto Shortener v1.1 loaded!');
 
 })();
