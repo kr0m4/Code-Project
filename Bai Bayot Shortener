@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bai Bayot Shortener
 // @namespace    http://tampermonkey.net/
-// @version      1.1
+// @version      1.3
 // @description  Automatically shorten URLs on bybio.co with custom aliases and copy all results
 // @author       Kr0m4
 // @match        https://bybio.co/*
@@ -50,7 +50,73 @@
         GM_deleteValue('autoShortenerState');
     }
 
-    // Main automation function
+    // ✅ IMPROVED: Much stricter error detection — only look inside modal/form containers
+    function detectFormError() {
+        // Look for error toast notifications or form validation messages
+        const errorSelectors = [
+            '[class*="toast"][class*="error"]',
+            '[class*="alert"][class*="error"]',
+            '[class*="notification"][class*="error"]',
+            '[role="alert"]',
+            '[class*="error-message"]',
+            '[class*="errorMessage"]',
+            '.text-red-500',
+            '.text-red-600',
+            '[style*="color: red"]',
+            '[style*="color:#e"]',
+        ];
+
+        for (const selector of errorSelectors) {
+            const els = document.querySelectorAll(selector);
+            for (const el of els) {
+                const text = el.textContent.toLowerCase();
+                // Only flag actual submission errors, not random page text
+                if (
+                    text.includes('already taken') ||
+                    text.includes('already used') ||
+                    text.includes('already exists') ||
+                    text.includes('alias is taken') ||
+                    text.includes('url already') ||
+                    text.includes('link already') ||
+                    text.includes('invalid url') ||
+                    text.includes('invalid alias') ||
+                    text.includes('field is required')
+                ) {
+                    console.log('❌ Form error detected:', el.textContent.trim());
+                    return el.textContent.trim();
+                }
+            }
+        }
+        return null;
+    }
+
+    // ✅ NEW: Detect if a new link was successfully created by watching for success indicators
+    function detectSuccess(alias) {
+        // Check if the modal closed (no submit button visible anymore)
+        const submitBtn = findShortenSubmitButton();
+        if (!submitBtn) return true; // Modal closed = success
+
+        // Check for success toast
+        const successSelectors = [
+            '[class*="toast"][class*="success"]',
+            '[class*="alert"][class*="success"]',
+            '[class*="notification"][class*="success"]',
+            '.text-green-500',
+            '.text-green-600',
+        ];
+        for (const selector of successSelectors) {
+            const els = document.querySelectorAll(selector);
+            for (const el of els) {
+                const text = el.textContent.toLowerCase();
+                if (text.includes('created') || text.includes('success') || text.includes('shortened')) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     async function automateShortening() {
         const state = loadState();
 
@@ -72,7 +138,6 @@
         console.log(`\n🔄 Processing link ${currentIndex + 1}/${customAliases.length}`);
         console.log(`Alias: ${currentAlias || '(random)'}`);
 
-        // ✅ FIX: If not on /dashboard, navigate there first before doing anything
         if (window.location.pathname !== '/dashboard') {
             console.log('Not on dashboard, redirecting...');
             window.location.href = 'https://bybio.co/dashboard';
@@ -82,7 +147,7 @@
         try {
             // Step 1: Click "Create link" button
             console.log('Step 1: Looking for Create link button...');
-            await wait(500);
+            await wait(300);
 
             const createButton = findCreateLinkButton();
             if (!createButton) throw new Error('Create link button not found');
@@ -90,7 +155,7 @@
             console.log('✓ Clicked Create link');
 
             // Step 2: Click "Shortened URL" in dropdown
-            await wait(500);
+            await wait(400);
             console.log('Step 2: Looking for Shortened URL option...');
 
             const shortenOption = findShortenUrlOption();
@@ -99,14 +164,17 @@
             console.log('✓ Selected Shortened URL');
 
             // Step 3: Fill long URL
-            await wait(500);
+            await wait(400);
             console.log('Step 3: Filling long URL...');
 
             const longUrlInput = document.querySelector('input[placeholder*="https://domain.com"]') ||
-                                 document.querySelector('input[type="text"]');
+                                 document.querySelector('input[placeholder*="http"]') ||
+                                 document.querySelector('input[type="url"]');
             if (!longUrlInput) throw new Error('Long URL input not found');
 
-            longUrlInput.value = redirectUrl;
+            // ✅ Use React-friendly value setting
+            const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+            nativeInputValueSetter.call(longUrlInput, redirectUrl);
             longUrlInput.dispatchEvent(new Event('input', { bubbles: true }));
             longUrlInput.dispatchEvent(new Event('change', { bubbles: true }));
             console.log('✓ Filled long URL');
@@ -119,17 +187,19 @@
             const aliasInput = Array.from(aliasInputs).find(input =>
                 input.placeholder && (
                     input.placeholder.includes('custom-alias') ||
-                    input.placeholder.includes('your-custom-alias')
+                    input.placeholder.includes('your-custom-alias') ||
+                    input.placeholder.includes('alias')
                 )
             );
 
             if (aliasInput && currentAlias) {
-                aliasInput.value = currentAlias;
+                nativeInputValueSetter.call(aliasInput, currentAlias);
                 aliasInput.dispatchEvent(new Event('input', { bubbles: true }));
                 aliasInput.dispatchEvent(new Event('change', { bubbles: true }));
                 console.log(`✓ Filled custom alias: ${currentAlias}`);
             } else if (aliasInput) {
-                aliasInput.value = '';
+                nativeInputValueSetter.call(aliasInput, '');
+                aliasInput.dispatchEvent(new Event('input', { bubbles: true }));
                 console.log('✓ Left alias empty for random generation');
             }
 
@@ -142,28 +212,30 @@
             submitButton.click();
             console.log('✓ Clicked Shorten URL');
 
-            // Step 6: Wait for response — use longer delay to allow redirect to happen
-            await wait(2000);
-
-            // Check for error message
-            const errorMessages = document.querySelectorAll('[style*="background"], .error, [class*="error"]');
-            let hasError = false;
-            for (const element of errorMessages) {
-                const text = element.textContent.toLowerCase();
-                if (text.includes('invalid') || text.includes('error') || text.includes('missing')) {
-                    hasError = true;
-                    console.log('❌ Error detected:', element.textContent);
-                    break;
-                }
+            // Step 6: Wait and check result — poll for up to 4 seconds
+            let errorText = null;
+            let success = false;
+            for (let i = 0; i < 8; i++) {
+                await wait(500);
+                errorText = detectFormError();
+                if (errorText) break;
+                success = detectSuccess(currentAlias);
+                if (success) break;
             }
 
-            if (hasError) {
+            if (errorText) {
                 state.failedLinks.push({
                     alias: currentAlias || '(empty)',
                     url: redirectUrl,
-                    reason: 'Invalid format or error in submission'
+                    reason: errorText
                 });
-                console.log('❌ Link failed:', currentAlias);
+                console.log('❌ Link failed:', currentAlias, '-', errorText);
+
+                // ✅ Close modal if still open before navigating
+                const cancelBtn = findButtonByText('Cancel') || findButtonByText('Close') || findButtonByText('×');
+                if (cancelBtn) cancelBtn.click();
+                await wait(300);
+
             } else {
                 const shortLink = `${baseUrl}${currentAlias}`;
                 state.shortenedLinks.push(shortLink);
@@ -171,13 +243,16 @@
             }
 
             state.currentIndex++;
-            console.log(`✅ Link ${state.currentIndex}/${customAliases.length} completed`);
             saveState(state);
+            updateProgress(state.currentIndex, customAliases.length);
+            updateResultsList(state.shortenedLinks);
+            if (state.failedLinks.length > 0) updateFailedList(state.failedLinks);
 
-            // ✅ FIX: Always navigate back to /dashboard for next link, regardless of current page
+            console.log(`✅ Link ${state.currentIndex}/${customAliases.length} completed`);
+
             if (state.currentIndex < customAliases.length) {
                 console.log('Navigating to dashboard for next link...');
-                await wait(300);
+                await wait(200);
                 window.location.href = 'https://bybio.co/dashboard';
             } else {
                 console.log('🎉 All links completed!');
@@ -197,7 +272,7 @@
             saveState(state);
 
             if (state.currentIndex < customAliases.length) {
-                await wait(1000);
+                await wait(800);
                 window.location.href = 'https://bybio.co/dashboard';
             } else {
                 finishProcess(state);
@@ -214,6 +289,20 @@
         console.log(`Successful: ${state.shortenedLinks.length}`);
         console.log(`Failed: ${state.failedLinks.length}`);
 
+        let message = `✅ Done! ${state.shortenedLinks.length} link(s) created`;
+        if (state.failedLinks.length > 0) message += `, ${state.failedLinks.length} failed`;
+        showSuccess(message);
+
+        // ✅ Always show copy button on finish, even with some failures
+        if (state.shortenedLinks.length > 0) {
+            const copyBtn = document.getElementById('copy-results-btn');
+            if (copyBtn) copyBtn.style.display = 'block';
+        }
+
+        updateProgress(state.customAliases.length, state.customAliases.length);
+        updateResultsList(state.shortenedLinks);
+        if (state.failedLinks.length > 0) updateFailedList(state.failedLinks);
+
         if (window.location.pathname !== '/dashboard') {
             window.location.href = 'https://bybio.co/dashboard';
         }
@@ -224,7 +313,7 @@
         if (errorDiv) {
             errorDiv.textContent = `❌ ${message}`;
             errorDiv.style.display = 'block';
-            setTimeout(() => { errorDiv.style.display = 'none'; }, 5000);
+            setTimeout(() => { errorDiv.style.display = 'none'; }, 6000);
         }
     }
 
@@ -327,7 +416,6 @@
         console.log('🚀 Starting automation...');
         console.log(`📋 ${customAliases.length} aliases to process`);
 
-        // ✅ FIX: Navigate to dashboard first if not already there
         if (window.location.pathname === '/dashboard') {
             setTimeout(automateShortening, 500);
         } else {
@@ -338,8 +426,10 @@
     function resetProcess() {
         clearState();
         const textarea = document.getElementById('custom-aliases');
-        textarea.style.borderColor = '#e5e7eb';
-        textarea.style.background = 'white';
+        if (textarea) {
+            textarea.style.borderColor = '#e5e7eb';
+            textarea.style.background = 'white';
+        }
         const validationMsg = document.getElementById('validation-message');
         if (validationMsg) validationMsg.style.display = 'none';
 
@@ -415,7 +505,7 @@
                     onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='none';">
                     ▶ Start Auto Shortening
                 </button>
-                <div id="error-message" style="display: none; margin-top: 12px; padding: 10px; background: #fee2e2; color: #dc2626; border-radius: 6px; font-size: 12px;"></div>
+                <div id="error-message" style="display: none; margin-top: 12px; padding: 10px; background: #fee2e2; color: #dc2626; border-radius: 6px; font-size: 12px; white-space: pre-line;"></div>
             </div>
 
             <div id="progress-section" style="display: none; padding: 20px;">
@@ -474,25 +564,25 @@
             let message = `✅ Process completed! ${state.shortenedLinks.length} successful`;
             if (state.failedLinks.length > 0) message += `, ${state.failedLinks.length} failed`;
             showSuccess(message);
-            document.getElementById('copy-results-btn').style.display = 'block';
+
+            // ✅ FIXED: Always show copy button when complete and there are results
+            if (state.shortenedLinks.length > 0) {
+                document.getElementById('copy-results-btn').style.display = 'block';
+            }
 
         } else if (state.isProcessing) {
             document.getElementById('start-btn').textContent = '⏳ Processing...';
             document.getElementById('start-btn').disabled = true;
 
             const path = window.location.pathname;
-
             if (path === '/dashboard') {
-                // We're on the dashboard — start the next link
                 console.log('✅ On dashboard, resuming automation...');
                 setTimeout(automateShortening, 1000);
             } else {
-                // ✅ FIX: We landed on /link/XXXXXX or another page after creation
-                // Always redirect back to /dashboard to continue the batch
-                console.log(`⚠️ On ${path} instead of /dashboard — redirecting to continue batch...`);
+                console.log(`⚠️ On ${path} — redirecting to dashboard...`);
                 setTimeout(() => {
                     window.location.href = 'https://bybio.co/dashboard';
-                }, 800);
+                }, 600);
             }
         }
     }
@@ -503,6 +593,6 @@
         createControlPanel();
     }
 
-    console.log('🚀 Bybio.co Auto Shortener v1.1 loaded!');
+    console.log('🚀 Bybio.co Auto Shortener v1.3 loaded!');
 
 })();
