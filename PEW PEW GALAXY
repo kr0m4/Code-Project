@@ -1,12 +1,14 @@
 // ==UserScript==
 // @name         Galaxy Web Revenue - Campaign Reports
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.7
 // @description  Fetch and view campaign conversion reports with country details and watermark
 // @author       kr0m4
 // @match        https://galaxywebrevenue2.com/*
 // @grant        GM_xmlhttpRequest
 // @connect      galaxywebrevenue2.com
+// @updateURL    https://raw.githubusercontent.com/kr0m4/Code-Project/main/PEW%20PEW%20GALAXY/galaxy-web-revenue.user.js
+// @downloadURL  https://raw.githubusercontent.com/kr0m4/Code-Project/main/PEW%20PEW%20GALAXY/galaxy-web-revenue.user.js
 // ==/UserScript==
 
 (function() {
@@ -71,7 +73,17 @@
         { id: '1021', name: 'ONF - XXHP-BONUS - Switzerland ONLY' },
         { id: '1022', name: 'ONF - XHP-BONUS - Belgium ONLY' },
         { id: '1023', name: 'ONF - BONUS - Italy Only' },
-        { id: '1024', name: 'ONF - XHP-BONUS - DK/FI/NO/SE Only' }
+        { id: '1024', name: 'ONF - XHP-BONUS - DK/FI/NO/SE Only' },
+        // ── New campaigns added v1.6 ──
+        { id: '1025', name: 'NC - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1026', name: 'NC - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1027', name: 'NC - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1028', name: 'CC - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1029', name: 'CC - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1030', name: 'CC - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1031', name: 'WD - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1032', name: 'WD - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1033', name: 'WD - XXHP - NO CAP - CH/SE/NO/DK/FI' },
     ];
 
     // ── Watermark ──────────────────────────────────────────────
@@ -275,13 +287,27 @@
             loadingIndicator.style.display = 'block';
             selectionArea.querySelectorAll('button,input').forEach(el => el.disabled=true);
 
-            const results = []; let completed = 0;
-            for(const id of selectedIds) {
+            // ── Parallel fetch with concurrency limit of 5 ──────────
+            const CONCURRENCY = 5;
+            let completed = 0;
+            const results = [];
+
+            async function fetchWithProgress(id) {
                 try {
-                    progressText.textContent = `Loading ${completed+1} of ${selectedIds.length}...`;
-                    results.push(await fetchCampaignConversions(id));
-                } catch(err) { console.error(`Error fetching campaign ${id}:`,err); }
-                completed++;
+                    const result = await fetchCampaignConversions(id);
+                    results.push(result);
+                } catch(err) {
+                    console.error(`Error fetching campaign ${id}:`, err);
+                } finally {
+                    completed++;
+                    progressText.textContent = `Loaded ${completed} of ${selectedIds.length}... (${selectedIds.length - completed} remaining)`;
+                }
+            }
+
+            // Run in batches of CONCURRENCY
+            for(let i = 0; i < selectedIds.length; i += CONCURRENCY) {
+                const batch = selectedIds.slice(i, i + CONCURRENCY).map(id => fetchWithProgress(id));
+                await Promise.all(batch);
             }
 
             loadingIndicator.style.display = 'none';
