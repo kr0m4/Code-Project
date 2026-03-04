@@ -16,7 +16,7 @@
     'use strict';
 
     console.log('═══════════════════════════════════════');
-    console.log('🚀 IP Logger Batch Creator LOADED v1.4!');
+    console.log('🚀 IP Logger Batch Creator LOADED v1.3!');
     console.log('═══════════════════════════════════════');
 
     const CONFIG = {
@@ -130,7 +130,7 @@
 
         await new Promise(r => setTimeout(r, 50));
 
-        console.log(`✅ Link created: https://iplogger.com/${slug}`);
+        console.log(`✅ Link created: https://${domain}/${slug}`);
 
         return true;
     }
@@ -166,8 +166,8 @@
             // Remove background overlay when complete
             removeBackgroundOverlay();
 
-            // Generate all links from original slugs using iplogger.com/
-            const allLinks = state.originalSlugs.map(slug => `https://iplogger.com/${slug}`).join('\n');
+            // Generate all links from original slugs
+            const allLinks = state.originalSlugs.map(slug => `https://${CONFIG.domain}/${slug}`).join('\n');
 
             // Mark batch as complete but keep the data
             state.running = false;
@@ -520,8 +520,7 @@
             return;
         }
 
-        // Generate links using iplogger.com/
-        const allLinks = state.originalSlugs.map(slug => `https://iplogger.com/${slug}`).join('\n');
+        const allLinks = state.originalSlugs.map(slug => `https://${CONFIG.domain}/${slug}`).join('\n');
 
         console.log(`📋 Attempting to copy ${state.originalSlugs.length} links...`);
 
@@ -786,4 +785,3 @@
     }, 50);
 
 })();
-
