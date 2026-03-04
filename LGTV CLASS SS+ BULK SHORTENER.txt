@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         LGTV Logger Shortener
 // @namespace    http://tampermonkey.net/
-// @version      1.4
+// @version      1.3
 // @description  Create IP Logger links with custom URL and slugs input
 // @author       kr0m4
 // @match        https://iplogger.org/account/*
 // @match        https://iplogger.org/account
 // @match        https://iplogger.org/logger/*
 // @grant        none
+// @updateURL    https://github.com/kr0m4/Code-Project/raw/refs/heads/main/LGTV%20CLASS%20SS%2B%20BULK%20SHORTENER.txt
+// @downloadURL  https://github.com/kr0m4/Code-Project/raw/refs/heads/main/LGTV%20CLASS%20SS%2B%20BULK%20SHORTENER.txt
 // ==/UserScript==
 
 (function() {
@@ -784,3 +786,4 @@
     }, 50);
 
 })();
+
