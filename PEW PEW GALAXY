@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Galaxy Web Revenue - Campaign Reports
 // @namespace    http://tampermonkey.net/
-// @version      1.7
+// @version      1.8
 // @description  Fetch and view campaign conversion reports with country details and watermark
 // @author       kr0m4
 // @match        https://galaxywebrevenue2.com/*
@@ -26,55 +26,10 @@
 
     const campaigns = [
         { id: '946',  name: 'JLG - v1 - AU/IE/FR/IT' },
-        { id: '952',  name: 'BN - AU/IE/US/UK/CA' },
-        { id: '953',  name: 'BN - v2 - AU/IE/US/UK/CA' },
-        { id: '954',  name: 'BN - v3 - AU/IE/US/UK/CA' },
-        { id: '955',  name: 'JLG - v2 - AU/IE/FR/IT' },
-        { id: '956',  name: 'JLG - v3 - AU/IE/FR/IT' },
         { id: '957',  name: 'NT - AU/IT' },
-        { id: '958',  name: 'HM - AU/FR/IT' },
-        { id: '960',  name: 'HM - v2 - AU/FR/IT' },
-        { id: '961',  name: 'JLG - v4 - AU/IE/FR/IT' },
-        { id: '962',  name: 'BE - v1 - AU/FR/IT/IE' },
-        { id: '963',  name: 'BE - v2 - AU/FR/IT/IE' },
-        { id: '964',  name: 'JLG - v5 - AU/IE/FR/IT' },
-        { id: '965',  name: 'NT - v2 - AU/IT' },
-        { id: '966',  name: 'JLG - v6 - AU/IE/FR/IT' },
-        { id: '967',  name: 'BE - v3 - AU/FR/IT/IE' },
-        { id: '968',  name: 'HM - v3 - AU/FR/IT' },
-        { id: '969',  name: 'JLG - v7 - AU/IE/FR/IT' },
-        { id: '970',  name: 'BE - v4 - AU/FR/IT/IE' },
-        { id: '971',  name: 'HM - v4 - AU/FR/IT' },
-        { id: '972',  name: 'BE - v5 - AU/CA/FR/IT/IE/NZ/ES' },
-        { id: '973',  name: 'BE - v6 - AU/CA/FR/IT/IE/NZ/ES' },
-        { id: '976',  name: 'JLG - v8 - AU/US/NZ/IR/CA/FR/IT' },
-        { id: '977',  name: 'BE - v7 - AU/CA/FR/IT/IE/NZ/ES' },
-        { id: '978',  name: 'HM - v5 - AU/CA/NZ/US/FR/IT/ES' },
-        { id: '981',  name: 'BE - XHP v1 - DK/FI/NO/SE Only' },
-        { id: '982',  name: 'BE - XHP v7 - DK/FI/NO/SE Only' },
-        { id: '983',  name: 'BE - XHP v6 - DK/FI/NO/SE Only' },
-        { id: '984',  name: 'BE - XHP v5 - DK/FI/NO/SE Only' },
-        { id: '985',  name: 'BE - XHP v4 - DK/FI/NO/SE Only' },
-        { id: '986',  name: 'BE - XHP v3 - DK/FI/NO/SE Only' },
-        { id: '987',  name: 'BE - XHP v2 - DK/FI/NO/SE Only' },
         { id: '989',  name: 'ONF - NO CAP - AU/FR/IT/NZ' },
-        { id: '990',  name: 'ONF - XHP - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-        { id: '1007', name: 'ONF - XHP - Germany' },
-        { id: '1008', name: 'ONF - XHP - Austria' },
-        { id: '1009', name: 'ONF - XXHP - Switzerland ONLY' },
-        { id: '1010', name: 'ONF - XHP - Belgium' },
-        { id: '1012', name: 'Nasty Hookups - XHP - Redirect Only - DE/AT/CH/BE/NL' },
+        { id: '990',  name: 'ONF - XHP - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE ONLY' },
         { id: '1013', name: 'JLG - UNIVERSAL - NO CAP - AU/US/NZ/IE/CA/FR/IT' },
-        { id: '1014', name: 'ONF - XHPv1 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-        { id: '1015', name: 'ONF - XHPv2 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-        { id: '1016', name: 'ONF - XHPv3 - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE' },
-        { id: '1019', name: 'Flirt - US Only' },
-        { id: '1020', name: 'ONF - XHP-BONUS - Germany/Austria ONLY' },
-        { id: '1021', name: 'ONF - XXHP-BONUS - Switzerland ONLY' },
-        { id: '1022', name: 'ONF - XHP-BONUS - Belgium ONLY' },
-        { id: '1023', name: 'ONF - BONUS - Italy Only' },
-        { id: '1024', name: 'ONF - XHP-BONUS - DK/FI/NO/SE Only' },
-        // ── New campaigns added v1.6 ──
         { id: '1025', name: 'NC - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1026', name: 'NC - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1027', name: 'NC - XXHP - NO CAP - CH/SE/NO/DK/FI' },
