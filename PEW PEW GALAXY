@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Galaxy Web Revenue - Campaign Reports
 // @namespace    http://tampermonkey.net/
-// @version      1.8
+// @version      1.9
 // @description  Fetch and view campaign conversion reports with country details and watermark
 // @author       kr0m4
 // @match        https://galaxywebrevenue2.com/*
@@ -39,6 +39,12 @@
         { id: '1031', name: 'WD - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1032', name: 'WD - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1033', name: 'WD - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1034', name: 'CV - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1035', name: 'CV - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1036', name: 'CV - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1037', name: 'GF - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1038', name: 'GF - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1039', name: 'GF - XXHP - NO CAP - CH/SE/NO/DK/FI' },
     ];
 
     // ── Watermark ──────────────────────────────────────────────
