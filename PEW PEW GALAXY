@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Galaxy Web Revenue - Campaign Reports
 // @namespace    http://tampermonkey.net/
-// @version      1.9
+// @version      2.0
 // @description  Fetch and view campaign conversion reports with country details and watermark
 // @author       kr0m4
 // @match        https://galaxywebrevenue2.com/*
@@ -25,26 +25,40 @@
     let cachedCampaignResults = null;
 
     const campaigns = [
-        { id: '946',  name: 'JLG - v1 - AU/IE/FR/IT' },
-        { id: '957',  name: 'NT - AU/IT' },
-        { id: '989',  name: 'ONF - NO CAP - AU/FR/IT/NZ' },
-        { id: '990',  name: 'ONF - XHP - NO CAP - AT/BE/CH/DE/DK/FI/NL/NO/SE ONLY' },
-        { id: '1013', name: 'JLG - UNIVERSAL - NO CAP - AU/US/NZ/IE/CA/FR/IT' },
+        // NC
         { id: '1025', name: 'NC - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1026', name: 'NC - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1027', name: 'NC - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1040', name: 'BONUS - NC - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1041', name: 'BONUS - NC - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // CC
         { id: '1028', name: 'CC - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1029', name: 'CC - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1030', name: 'CC - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // WD
         { id: '1031', name: 'WD - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1032', name: 'WD - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1033', name: 'WD - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // CV
         { id: '1034', name: 'CV - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1035', name: 'CV - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1036', name: 'CV - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // GF
         { id: '1037', name: 'GF - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1038', name: 'GF - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1039', name: 'GF - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // HotGleam PG
+        { id: '1042', name: 'HotGleam PG - v1 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1043', name: 'HotGleam PG - v1 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1044', name: 'HotGleam PG - v1 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // FlirtTendre PG
+        { id: '1045', name: 'FlirtTendre PG - v1 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1046', name: 'FlirtTendre PG - v1 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1047', name: 'FlirtTendre PG - v1 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // CitasBonitas
+        { id: '1048', name: 'CitasBonitas - v1 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1049', name: 'CitasBonitas - v1 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1050', name: 'CitasBonitas - v1 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
     ];
 
     // ── Watermark ──────────────────────────────────────────────
