@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Galaxy Web Revenue - Campaign Reports
 // @namespace    http://tampermonkey.net/
-// @version      2.0
+// @version      2.1
 // @description  Fetch and view campaign conversion reports with country details and watermark
 // @author       kr0m4
 // @match        https://galaxywebrevenue2.com/*
@@ -59,6 +59,35 @@
         { id: '1048', name: 'CitasBonitas - v1 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
         { id: '1049', name: 'CitasBonitas - v1 - XHP - NO CAP - DE/NL/BE/AT' },
         { id: '1050', name: 'CitasBonitas - v1 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // NC v1-v6 (NO CAP tier)
+        { id: '1051', name: 'NC-v1 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1052', name: 'NC-v2 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1053', name: 'NC-v3 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1054', name: 'NC-v4 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1055', name: 'NC-v5 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1056', name: 'NC-v6 - NO CAP - AU/GB/US/IE/FR/IT/ES' },
+        // NC v1-v6 (XHP tier)
+        { id: '1057', name: 'NCv1 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1058', name: 'NCv2 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1059', name: 'NCv3 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1060', name: 'NCv4 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1061', name: 'NCv5 - XHP - NO CAP - DE/NL/BE/AT' },
+        { id: '1062', name: 'NCv6 - XHP - NO CAP - DE/NL/BE/AT' },
+        // NC v1-v6 (XXHP tier)
+        { id: '1063', name: 'NC-v1 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1064', name: 'NC-v2 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1065', name: 'NC-v3 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1066', name: 'NC-v4 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1067', name: 'NC-v5 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        { id: '1068', name: 'NC-v6 - XXHP - NO CAP - CH/SE/NO/DK/FI' },
+        // Gentle Flirt
+        { id: '1069', name: 'Gentle Flirt - Couple Image J1 - No Cap - Apple Pay - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1070', name: 'Gentle Flirt - Couple Image J1 - XHP No Cap - Apple Pay - DE/NL/BE/AT' },
+        { id: '1071', name: 'Gentle Flirt - Couple Lander - XXHP No Cap - Apple Pay - CH/SE/NO/DK/FI' },
+        // Naughty Charm
+        { id: '1072', name: 'Naughty Charm - Female J1 - Apple Pay - No Cap - AU/GB/US/IE/FR/IT/ES' },
+        { id: '1073', name: 'Naughty Charm - Female J1 - XHP No Cap - Apple Pay - DE/NL/BE/AT' },
+        { id: '1074', name: 'Naughty Charm - Female J1 - XXHP No Cap - Apple Pay - CH/SE/NO/DK/FI' },
     ];
 
     // ── Watermark ──────────────────────────────────────────────
@@ -178,20 +207,43 @@
     }
 
     // ── Fetch one campaign ─────────────────────────────────────
+    // Returns null if the campaign doesn't exist (404 or redirect to error page).
     function fetchCampaignConversions(offerId) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             const url = `https://galaxywebrevenue2.com/report/offer/${offerId}/conversions-by-country?filter=country&d_from=${currentDateRange.from}&d_to=${currentDateRange.to}&dateSelect=0`;
             GM_xmlhttpRequest({
                 method: 'GET', url,
                 onload(response) {
-                    if(response.status===200) {
-                        const doc = new DOMParser().parseFromString(response.responseText,'text/html');
-                        const titleEl = doc.querySelector('h1,.page-title,title');
-                        const campaignName = titleEl ? titleEl.textContent.trim() : `Campaign ${offerId}`;
-                        resolve({ offerId, campaignName, data: parseCountryData(doc) });
-                    } else reject(new Error(`Failed ${offerId}`));
+                    // Treat non-200 or redirect-to-login/404 pages as "not found"
+                    if (response.status !== 200) {
+                        console.warn(`Campaign ${offerId} returned HTTP ${response.status} — skipping.`);
+                        resolve(null);
+                        return;
+                    }
+
+                    const doc = new DOMParser().parseFromString(response.responseText, 'text/html');
+
+                    // Detect "not found" or "access denied" pages by checking for
+                    // common error indicators in the parsed document.
+                    const bodyText = doc.body ? doc.body.innerText.toLowerCase() : '';
+                    const notFoundSignals = ['404', 'not found', 'page not found', 'offer not found', 'access denied', 'unauthorized'];
+                    const isNotFound = notFoundSignals.some(sig => bodyText.includes(sig)) &&
+                                       !doc.querySelector('table');   // no data table = definitely an error page
+
+                    if (isNotFound) {
+                        console.warn(`Campaign ${offerId} appears to not exist — skipping.`);
+                        resolve(null);
+                        return;
+                    }
+
+                    const titleEl = doc.querySelector('h1,.page-title,title');
+                    const campaignName = titleEl ? titleEl.textContent.trim() : `Campaign ${offerId}`;
+                    resolve({ offerId, campaignName, data: parseCountryData(doc) });
                 },
-                onerror() { reject(new Error(`Network error ${offerId}`)); }
+                onerror() {
+                    console.error(`Network error fetching campaign ${offerId} — skipping.`);
+                    resolve(null);   // resolve null so we don't break Promise.all
+                }
             });
         });
     }
@@ -270,9 +322,12 @@
             async function fetchWithProgress(id) {
                 try {
                     const result = await fetchCampaignConversions(id);
-                    results.push(result);
+                    // null means the campaign doesn't exist — skip it silently
+                    if (result !== null) {
+                        results.push(result);
+                    }
                 } catch(err) {
-                    console.error(`Error fetching campaign ${id}:`, err);
+                    console.error(`Unexpected error for campaign ${id}:`, err);
                 } finally {
                     completed++;
                     progressText.textContent = `Loaded ${completed} of ${selectedIds.length}... (${selectedIds.length - completed} remaining)`;
